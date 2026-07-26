@@ -19,6 +19,9 @@ ingest_token.txt
 go.work
 go.work.sum
 
+# ビルドに使う Node のパッケージ。package-lock.json は追跡する。
+node_modules/
+
 # ---------------------------------------------------------------- 実行時に作られるもの
 # 生ログ・台帳・受け渡しの JSONL。
 # 通常は $AUTOLOG_HOME（リポジトリ外）に作られるが、
