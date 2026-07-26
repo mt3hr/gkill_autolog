@@ -123,7 +123,8 @@ gkill を Termux で動かしている前提です。
 
 ```
 収集アプリ ──→ /sdcard/gkill_autolog/events/*.jsonl ──→ autolog import ──→ その端末の gkill
-           └─→ /sdcard/gkill_autolog/screenshots/*.webp ──→ dvnf ──→ AutoScreenshot_<端末>_<日付>
+           ├─→ /sdcard/gkill_autolog/screenshots/*.webp ──→ dvnf ──→ AutoScreenshot_<端末>_<日付>
+           └─→ /sdcard/gkill_autolog/gpslog/YYYYMMDD.gpx ──→ dvnf ──→ GPSLogs_<端末>_<日付>
 ```
 
 ### 1. 設定ファイルを置く
@@ -166,7 +167,8 @@ PC でビルドして配り、端末で取り込みます。
 | **全ファイルアクセス** | 生ログの書き出し | 端末に溜まったまま渡らない |
 | 使用状況へのアクセス | アプリ利用の記録 | アプリ利用が記録されない |
 | 通知へのアクセス | 通知・再生情報 | 通知と再生が取れない |
-| 位置情報 | Wi-Fi の SSID | SSID が空になる |
+| 位置情報 | Wi-Fi の SSID、GPX | SSID が空になり、位置情報も取れない |
+| 位置情報を「常に許可」 | 画面が消えている間の GPX | 画面を消すと位置情報が途切れる |
 | バッテリー最適化の対象外 | 常駐 | 収集が止まる |
 
 全ファイルアクセスだけは他に手段がありません。
@@ -174,6 +176,20 @@ PC でビルドして配り、端末で取り込みます。
 
 「収集を開始」で常駐が始まります。書き出しは1時間おきで、
 すぐ渡したいときは「今すぐ書き出し」を押します。
+
+### 位置情報 (GPX)
+
+「位置情報を記録する」をオンにすると、日別の `YYYYMMDD.gpx` を
+`/sdcard/gkill_autolog/gpslog/` に書きます。記録間隔は既定60秒で、
+10〜3600秒の範囲で変えられます。短くするほど経路は細かくなりますが電池を使います。
+
+**「常に許可」が要ります。** 通常の許可ダイアログでは選べないので、
+画面の「位置情報を「常に許可」にする」からアプリの設定を開いて選んでください。
+これが無いと、画面が消えている間の位置情報が取れません。
+
+GPX は書くたびにその日の全点から作り直し、いったん `.tmp` へ書いてから
+名前を変えます。読む側からは常に出来上がったファイルしか見えないので、
+書きかけを dvnf がコピーする心配はありません。
 
 ### 4. 取り込む
 
@@ -202,12 +218,15 @@ done
 # スクリーンショット
 gkill_server dvnf move "$HOME/storage/shared/gkill_autolog/screenshots/*" AutoScreenshot
 gkill_server idf $(gkill_server dvnf get AutoScreenshot)
+
+# 位置情報。gkill 側の rep 登録は既存の $HOME/Kyou/GPSLogs_* のままでよい。
+gkill_server dvnf copy "$HOME/storage/shared/gkill_autolog/gpslog/*" GPSLogs
 ```
 
 ### root が無い端末
 
 スクリーンショットと Chrome 履歴は取れません。
-アプリ利用・通知・Wi-Fi・充電・端末利用は取れます。
+アプリ利用・通知・Wi-Fi・充電・端末利用・位置情報は取れます。
 
 ## 端末を増やすとき
 

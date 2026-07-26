@@ -13,6 +13,8 @@
     <string name="label_device">端末名 (config.env に AUTOLOG_DEVICE があればそちらが優先)</string>
     <string name="label_read_chrome_history">Chrome の履歴を root で読む</string>
     <string name="label_capture_screenshots">毎時スクリーンショットを撮る (root)</string>
+    <string name="label_record_location">位置情報を記録する (GPX)</string>
+    <string name="label_location_interval">記録間隔（秒。10〜3600。短いほど電池を使う）</string>
 
     <string name="action_save">保存</string>
     <string name="action_start">収集を開始</string>
@@ -28,8 +30,11 @@
     <string name="permission_notification">通知へのアクセスを許可</string>
     <string name="permission_accessibility">ユーザー補助を許可</string>
     <string name="permission_location">位置情報を許可 (Wi-Fi の SSID に必要)</string>
+    <string name="permission_background_location">位置情報を「常に許可」にする (GPX に必要)</string>
     <string name="permission_battery">バッテリー最適化の対象外にする</string>
 
     <string name="storage_permission_not_needed">この Android では全ファイルアクセスの許可は要りません</string>
+    <string name="background_location_not_needed">この Android では「常に許可」の設定は要りません</string>
+    <string name="background_location_hint">「権限」→「位置情報」→「常に許可」を選んでください</string>
     <string name="error_open_settings">設定画面を開けませんでした</string>
 </resources>

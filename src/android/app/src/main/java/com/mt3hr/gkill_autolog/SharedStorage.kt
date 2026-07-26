@@ -28,6 +28,15 @@ object SharedStorage {
     val screenshotsDir: File
         get() = File(root, "screenshots")
 
+    /**
+     * GPX の置き場。dvnf.sh が GPSLogs へ運ぶ。
+     *
+     * 日別に YYYYMMDD.gpx を置く。この名前でないと gkill が日付で見つけられない
+     * (gps_log_repository_gpx_dir_impl.go の findGPXFileByDate)。
+     */
+    val gpsLogDir: File
+        get() = File(root, "gpslog")
+
     /** autolog の設定ファイル。アプリは読み書きしない（gkill のパスワードを含むため）。 */
     val configFile: File
         get() = File(root, "config.env")
