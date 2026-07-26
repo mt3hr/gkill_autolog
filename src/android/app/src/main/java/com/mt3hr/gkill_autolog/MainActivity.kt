@@ -18,6 +18,7 @@ import androidx.core.app.ActivityCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import com.mt3hr.gkill_autolog.export.JsonlExporter
+import com.mt3hr.gkill_autolog.store.GpsPointStore
 
 /**
  * 設定と権限付与の画面。
@@ -43,15 +44,31 @@ class MainActivity : AppCompatActivity() {
         val deviceInput = findViewById<EditText>(R.id.device)
         val chromeCheckBox = findViewById<CheckBox>(R.id.read_chrome_history)
         val screenshotCheckBox = findViewById<CheckBox>(R.id.capture_screenshots)
+        val locationCheckBox = findViewById<CheckBox>(R.id.record_location)
+        val locationIntervalInput = findViewById<EditText>(R.id.location_interval)
 
         deviceInput.setText(config.device)
         chromeCheckBox.isChecked = config.readChromeHistory
         screenshotCheckBox.isChecked = config.captureScreenshots
+        locationCheckBox.isChecked = config.recordLocation
+        locationIntervalInput.setText(config.locationIntervalSeconds.toString())
 
         findViewById<Button>(R.id.save).setOnClickListener {
             config.device = deviceInput.text.toString()
             config.readChromeHistory = chromeCheckBox.isChecked
             config.captureScreenshots = screenshotCheckBox.isChecked
+            config.recordLocation = locationCheckBox.isChecked
+
+            // 空欄や範囲外はそのまま使わず、扱える値へ丸めて画面へ返す。
+            val interval = Config.clampLocationInterval(
+                locationIntervalInput.text.toString().toIntOrNull()
+                    ?: Config.DEFAULT_LOCATION_INTERVAL_SECONDS
+            )
+            config.locationIntervalSeconds = interval
+            locationIntervalInput.setText(interval.toString())
+
+            // 収集中なら、新しい設定で購読し直させる。
+            AutologService.reloadSettings(this)
             updateStatus()
         }
 
@@ -81,6 +98,9 @@ class MainActivity : AppCompatActivity() {
         }
         findViewById<Button>(R.id.permission_location).setOnClickListener {
             requestLocationPermission()
+        }
+        findViewById<Button>(R.id.permission_background_location).setOnClickListener {
+            requestBackgroundLocationPermission()
         }
         findViewById<Button>(R.id.permission_battery).setOnClickListener {
             requestIgnoreBatteryOptimizations()
@@ -136,19 +156,71 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun updateStatus() {
+        // ここで落ちると画面ごと死ぬ。表示のためだけの処理なので、
+        // 失敗しても画面は開いたままにする。
+        // 権限を変えて戻ってきた直後にも通る道なので、特に落とせない。
+        statusView.text = runCatching { buildStatusText() }
+            .getOrElse { "状態を取得できませんでした: ${it.message}" }
+    }
+
+    private fun buildStatusText(): String {
         val pending = JsonlExporter(this).pendingCount()
-        statusView.text = buildString {
+        // 開きっぱなしにすると onResume のたびに接続が増える。
+        val gpsPoints = GpsPointStore(this).use { it.count() }
+        return buildString {
             appendLine("未書き出しのイベント: $pending 件")
+            appendLine("記録した位置情報:     $gpsPoints 点")
             appendLine()
             appendLine("全ファイルアクセス:   ${mark(SharedStorage.canWrite())}")
             appendLine("使用状況へのアクセス: ${mark(hasUsageStatsPermission())}")
             appendLine("通知へのアクセス:     ${mark(hasNotificationAccess())}")
-            appendLine("位置情報(Wi-Fi SSID): ${mark(hasLocationPermission())}")
+            appendLine("位置情報:             ${mark(hasLocationPermission())}")
+            appendLine("位置情報(常に許可):   ${mark(hasBackgroundLocationPermission())}")
             appendLine("バッテリー最適化除外: ${mark(isIgnoringBatteryOptimizations())}")
             appendLine()
             appendLine("書き出し先: ${SharedStorage.eventsDir}")
+            appendLine("GPX:        ${SharedStorage.gpsLogDir}")
             append("取り込みは Termux の autolog.sh が行います")
+
+            // 落ちた記録があれば気づけるようにする。
+            val crashLog = java.io.File(SharedStorage.root, AutologApp.CRASH_LOG_NAME)
+            if (crashLog.exists()) {
+                appendLine()
+                appendLine()
+                appendLine("落ちた記録があります: $crashLog")
+                append(crashLog.readText().trim().takeLast(CRASH_EXCERPT_CHARS))
+            }
         }
+    }
+
+    /**
+     * 位置情報を「常に許可」にしてもらう。
+     *
+     * 画面が消えている間も GPX を記録するのに要る。
+     * 通常の許可ダイアログでは出せず、アプリの設定画面から選ぶしかない。
+     */
+    private fun requestBackgroundLocationPermission() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            statusView.text = getString(R.string.background_location_not_needed)
+            return
+        }
+        try {
+            startActivity(
+                Intent(
+                    Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                    Uri.parse("package:$packageName")
+                )
+            )
+            statusView.text = getString(R.string.background_location_hint)
+        } catch (_: Exception) {
+            statusView.text = getString(R.string.error_open_settings)
+        }
+    }
+
+    private fun hasBackgroundLocationPermission(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return true
+        return checkSelfPermission(android.Manifest.permission.ACCESS_BACKGROUND_LOCATION) ==
+            android.content.pm.PackageManager.PERMISSION_GRANTED
     }
 
     /**
@@ -248,5 +320,8 @@ class MainActivity : AppCompatActivity() {
 
         /** 送信結果を見せておく時間。 */
         private const val STATUS_MESSAGE_MS = 3000L
+
+        /** 画面に出す、落ちた記録の末尾の文字数。 */
+        private const val CRASH_EXCERPT_CHARS = 1200
     }
 }

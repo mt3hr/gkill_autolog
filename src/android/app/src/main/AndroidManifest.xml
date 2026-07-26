@@ -19,6 +19,8 @@
     <!-- 常駐収集。dataSync は Android 15 で1日6時間の上限が入るため specialUse を使う。 -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <!-- 画面が消えている間も位置情報を記録するため。 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
 
     <!-- アプリ利用状況。設定画面からの許可が要る。 -->
     <uses-permission
@@ -31,6 +33,12 @@
     <!-- Wi-Fi の SSID。Android 10 以降は位置情報の許可が要る。 -->
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <!--
+      GPX の記録。画面が消えている間も位置情報を取るために要る。
+      通常の許可ダイアログでは出せず、設定画面から「常に許可」を選ぶ必要がある。
+    -->
+    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
 
     <!-- Bluetooth 機器名。 -->
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
@@ -67,7 +75,7 @@
         <service
             android:name=".AutologService"
             android:exported="false"
-            android:foregroundServiceType="specialUse">
+            android:foregroundServiceType="specialUse|location">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="端末の操作ログを継続的に記録し、自分のgkillへ取り込むため" />

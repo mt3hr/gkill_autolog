@@ -1,5 +1,7 @@
 package com.mt3hr.gkill_autolog
 
+import android.Manifest
+import android.app.ActivityManager
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -7,25 +9,32 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.util.Log
+import androidx.core.content.ContextCompat
 import com.mt3hr.gkill_autolog.collect.AppUsageCollector
 import com.mt3hr.gkill_autolog.collect.ChromeHistoryCollector
 import com.mt3hr.gkill_autolog.collect.MediaCollector
 import com.mt3hr.gkill_autolog.collect.ScreenshotCollector
+import com.mt3hr.gkill_autolog.collect.LocationCollector
 import com.mt3hr.gkill_autolog.collect.SystemEventCollector
 import com.mt3hr.gkill_autolog.export.ExportWorker
+import com.mt3hr.gkill_autolog.export.GpxWriter
 import com.mt3hr.gkill_autolog.export.JsonlExporter
 import com.mt3hr.gkill_autolog.model.Event
 import com.mt3hr.gkill_autolog.model.EventType
 import com.mt3hr.gkill_autolog.model.SessionAction
 import com.mt3hr.gkill_autolog.store.EventStore
+import com.mt3hr.gkill_autolog.store.GpsPointStore
 import org.json.JSONObject
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
@@ -47,6 +56,9 @@ class AutologService : Service() {
     /** 直前に書き出した時刻。 */
     private var lastExportAt: Long = 0
 
+    /** 直前に GPX を書いた時刻。 */
+    private var lastGpxWriteAt: Long = 0
+
     /** 書き出し中かどうか。前の書き出しが終わる前に次を積まないようにする。 */
     private val exporting = AtomicBoolean(false)
 
@@ -55,6 +67,7 @@ class AutologService : Service() {
     private lateinit var media: MediaCollector
     private lateinit var chromeHistory: ChromeHistoryCollector
     private lateinit var screenshots: ScreenshotCollector
+    private lateinit var location: LocationCollector
 
     private val tick = object : Runnable {
         override fun run() {
@@ -79,10 +92,21 @@ class AutologService : Service() {
         media = MediaCollector(applicationContext, store)
         chromeHistory = ChromeHistoryCollector(store, applicationContext.cacheDir)
         screenshots = ScreenshotCollector(applicationContext, Config(applicationContext))
+        location = LocationCollector(applicationContext, GpsPointStore(applicationContext))
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        startForeground(NOTIFICATION_ID, buildNotification())
+        if (!startForegroundCompat()) {
+            // 常駐に入れなければ収集はできない。落とさずに畳む。
+            stopSelf()
+            return START_NOT_STICKY
+        }
+
+        // 設定が変わっただけのときは、収集開始として記録し直さない。
+        if (intent?.action == ACTION_RELOAD_SETTINGS) {
+            location.restart()
+            return START_STICKY
+        }
 
         store.put(
             Event.instant(
@@ -92,6 +116,7 @@ class AutologService : Service() {
         )
 
         systemEvents.start()
+        location.start()
         ExportWorker.schedule(applicationContext)
 
         handler.removeCallbacks(tick)
@@ -104,8 +129,14 @@ class AutologService : Service() {
     override fun onDestroy() {
         handler.removeCallbacks(tick)
         systemEvents.stop()
+        location.stop()
         media.flush()
+
+        // 溜まっている点を書き残さない。
+        // onDestroy は主スレッドなので、ファイル入出力は投げてから短く待つ。
+        ioExecutor.execute { runCatching { GpxWriter(applicationContext).writeAll() } }
         ioExecutor.shutdown()
+        runCatching { ioExecutor.awaitTermination(SHUTDOWN_WAIT_MS, TimeUnit.MILLISECONDS) }
 
         store.put(
             Event.instant(
@@ -131,7 +162,29 @@ class AutologService : Service() {
         // 撮影は root コマンドの実行を伴うので主スレッドでは行わない。
         ioExecutor.execute { screenshots.captureIfDue(now) }
 
+        writeGpxIfDue(now)
         exportIfDue(now)
+    }
+
+    /**
+     * 溜まった位置情報を GPX として書き出す。
+     *
+     * 生ログの書き出しとは別にしてある。GPX は日付をまたぐと別ファイルになるので、
+     * 1時間おきだと日付が変わった直後の点をしばらく書き残してしまう。
+     */
+    private fun writeGpxIfDue(now: Long) {
+        if (!Config(applicationContext).recordLocation) return
+        if (now - lastGpxWriteAt < GPX_WRITE_INTERVAL_MS) return
+
+        lastGpxWriteAt = now
+        ioExecutor.execute {
+            try {
+                GpxWriter(applicationContext).writeAll()
+            } catch (e: Exception) {
+                // 書けなかった分は点として残っているので、次回やり直す。
+                Log.i(TAG, "GPX を書けなかった。次回やり直す: ${e.message}")
+            }
+        }
     }
 
     /**
@@ -162,6 +215,51 @@ class AutologService : Service() {
                 exporting.set(false)
             }
         }
+    }
+
+    /**
+     * 常駐に入る。入れたかどうかを返す。
+     *
+     * **位置情報の種別は、実際に使えるときだけ宣言する。**
+     * Android 14 以降、`location` を含むフォアグラウンドサービスは
+     * 開始する時点で位置情報の権限を持っていないと SecurityException になる。
+     * マニフェストに書いてあるだけで検査されるので、位置情報を使わない設定でも
+     * 権限が無ければ収集そのものが始められなくなってしまう。
+     *
+     * 実際、これで「収集を開始」を押すとアプリが落ちた。
+     */
+    private fun startForegroundCompat(): Boolean {
+        val notification = buildNotification()
+        return try {
+            // 種別の指定が要るのは Android 14 以降。それ以前はマニフェストの宣言で動く。
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                var types = ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+                if (canUseLocationForegroundService()) {
+                    types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
+                }
+                startForeground(NOTIFICATION_ID, notification, types)
+            } else {
+                startForeground(NOTIFICATION_ID, notification)
+            }
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "常駐に入れなかった", e)
+            false
+        }
+    }
+
+    /**
+     * 位置情報つきの常駐にできるか。
+     *
+     * 設定でオンにしていて、かつ権限があるときだけ。
+     * どちらか欠けていると開始に失敗する。
+     */
+    private fun canUseLocationForegroundService(): Boolean {
+        if (!Config(applicationContext).recordLocation) return false
+        return ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) ==
+            PackageManager.PERMISSION_GRANTED ||
+            ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) ==
+            PackageManager.PERMISSION_GRANTED
     }
 
     private fun buildNotification(): Notification {
@@ -207,6 +305,20 @@ class AutologService : Service() {
          */
         private const val EXPORT_INTERVAL_MS = 60 * 60 * 1000L
 
+        /**
+         * GPX を書き出す間隔。
+         *
+         * 生ログより短くしてある。日付をまたぐとファイルが変わるので、
+         * 間隔が長いと日付が変わった直後の点をしばらく書き残すことになる。
+         */
+        private const val GPX_WRITE_INTERVAL_MS = 60 * 1000L
+
+        /** 停止時に、書き残しの GPX を待つ時間。長く待つと ANR になる。 */
+        private const val SHUTDOWN_WAIT_MS = 2_000L
+
+        /** 設定が変わったことをサービスへ伝える Intent の印。 */
+        private const val ACTION_RELOAD_SETTINGS = "com.mt3hr.gkill_autolog.RELOAD_SETTINGS"
+
         fun start(context: Context) {
             val intent = Intent(context, AutologService::class.java)
             context.startForegroundService(intent)
@@ -215,6 +327,28 @@ class AutologService : Service() {
         fun stop(context: Context) {
             context.stopService(Intent(context, AutologService::class.java))
             ExportWorker.cancel(context)
+        }
+
+        /**
+         * 設定の変更を反映させる。
+         *
+         * 位置情報の記録間隔は購読するときに渡すので、
+         * 変えたら購読し直さないと効かない。
+         * サービスが動いていなければ何も起きない。
+         */
+        fun reloadSettings(context: Context) {
+            if (!isRunning(context)) return
+            val intent = Intent(context, AutologService::class.java)
+                .setAction(ACTION_RELOAD_SETTINGS)
+            context.startForegroundService(intent)
+        }
+
+        private fun isRunning(context: Context): Boolean {
+            val manager = context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
+                ?: return false
+            @Suppress("DEPRECATION")
+            return manager.getRunningServices(Int.MAX_VALUE)
+                .any { it.service.className == AutologService::class.java.name }
         }
     }
 }
