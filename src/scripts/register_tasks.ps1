@@ -22,7 +22,11 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot '_gkill_api.ps1')
 
 $repoRoot = Get-AutologRoot $PSScriptRoot
-$autolog = Join-Path $repoRoot 'autolog.exe'
+# npm run build の出力先。昔はリポジトリ直下だったのでそちらも見る。
+$autolog = @(
+    (Join-Path $repoRoot 'release/windows_amd64/autolog.exe')
+    (Join-Path $repoRoot 'autolog.exe')
+) | Where-Object { Test-Path $_ } | Select-Object -First 1
 $runImport = Join-Path $PSScriptRoot 'run_import.ps1'
 
 $collectTaskName = 'gkill_autolog_collect'
@@ -40,8 +44,8 @@ if ($Unregister) {
     exit 0
 }
 
-if (-not (Test-Path $autolog)) {
-    throw "autolog.exe が見つからない: $autolog  (src/scripts/build.ps1 を実行してください)"
+if (-not $autolog -or -not (Test-Path $autolog)) {
+    throw 'autolog.exe が見つからない。npm run build を実行してください'
 }
 if (-not (Test-Path $runImport)) {
     throw "run_import.ps1 が見つからない: $runImport"
