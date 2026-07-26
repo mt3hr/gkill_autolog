@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 時計を模した簡素なアイコン。操作ログの記録を表す。 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M54,30a24,24 0 1,0 0.1,0zM54,36a18,18 0 1,1 -0.1,0zM52.5,40h3v14.5l10,6 -1.5,2.6 -11.5,-6.9z" />
+</vector>

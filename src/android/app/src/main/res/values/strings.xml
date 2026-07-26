@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">gkill autolog</string>
+
+    <string name="service_channel_name">操作ログの収集</string>
+    <string name="service_notification_title">操作ログを収集中</string>
+    <string name="service_notification_text">gkill へ入れるための記録を取っています</string>
+
+    <string name="notification_listener_label">gkill autolog 通知の取得</string>
+    <string name="accessibility_label">gkill autolog 前面アプリの把握</string>
+    <string name="accessibility_description">どのアプリが前面になったかだけを見ます。画面の内容は読み取りません。</string>
+
+    <string name="label_device">端末名 (config.env に AUTOLOG_DEVICE があればそちらが優先)</string>
+    <string name="label_read_chrome_history">Chrome の履歴を root で読む</string>
+    <string name="label_capture_screenshots">毎時スクリーンショットを撮る (root)</string>
+
+    <string name="action_save">保存</string>
+    <string name="action_start">収集を開始</string>
+    <string name="action_stop">収集を停止</string>
+    <string name="action_export_now">今すぐ書き出し</string>
+    <string name="exporting">書き出し中…</string>
+    <string name="export_done">%1$d 件を書き出しました</string>
+    <string name="export_nothing">書き出すものがありません</string>
+    <string name="export_failed">書き出せませんでした。全ファイルアクセスの許可を確認してください</string>
+
+    <string name="permission_storage">全ファイルアクセスを許可 (書き出しに必要)</string>
+    <string name="permission_usage">使用状況へのアクセスを許可</string>
+    <string name="permission_notification">通知へのアクセスを許可</string>
+    <string name="permission_accessibility">ユーザー補助を許可</string>
+    <string name="permission_location">位置情報を許可 (Wi-Fi の SSID に必要)</string>
+    <string name="permission_battery">バッテリー最適化の対象外にする</string>
+
+    <string name="storage_permission_not_needed">この Android では全ファイルアクセスの許可は要りません</string>
+    <string name="error_open_settings">設定画面を開けませんでした</string>
+</resources>

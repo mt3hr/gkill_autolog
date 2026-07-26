@@ -1,0 +1,21 @@
+{
+  "manifest_version": 3,
+  "name": "gkill autolog",
+  "version": "1.0.0",
+  "description": "閲覧したページと YouTube / YouTube Music の再生を gkill_autolog へ送る。",
+  "permissions": ["tabs", "storage", "alarms"],
+  "host_permissions": ["http://127.0.0.1/*", "http://localhost/*"],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["*://www.youtube.com/*", "*://music.youtube.com/*"],
+      "js": ["content_youtube.js"],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ],
+  "options_page": "options.html"
+}
