@@ -35,6 +35,27 @@ class Config(context: Context) {
         set(value) = preferences.edit().putBoolean(KEY_CAPTURE_SCREENSHOTS, value).apply()
 
     /**
+     * 位置情報を記録するかどうか。
+     * 記録した点は日別の GPX になり、dvnf が GPSLogs へ運ぶ。
+     */
+    var recordLocation: Boolean
+        get() = preferences.getBoolean(KEY_RECORD_LOCATION, false)
+        set(value) = preferences.edit().putBoolean(KEY_RECORD_LOCATION, value).apply()
+
+    /**
+     * 位置情報を記録する間隔（秒）。
+     *
+     * 短くするほど経路は細かくなるが電池を使う。
+     * 極端な値で消耗しないよう [MIN_LOCATION_INTERVAL_SECONDS] 〜
+     * [MAX_LOCATION_INTERVAL_SECONDS] に丸める。
+     */
+    var locationIntervalSeconds: Int
+        get() = preferences.getInt(KEY_LOCATION_INTERVAL, DEFAULT_LOCATION_INTERVAL_SECONDS)
+        set(value) = preferences.edit()
+            .putInt(KEY_LOCATION_INTERVAL, clampLocationInterval(value))
+            .apply()
+
+    /**
      * 端末名を config.env に合わせる。
      *
      * 端末名は autolog も使うので、二か所に持つと食い違う。
@@ -71,6 +92,17 @@ class Config(context: Context) {
         private const val KEY_DEVICE = "device"
         private const val KEY_READ_CHROME_HISTORY = "read_chrome_history"
         private const val KEY_CAPTURE_SCREENSHOTS = "capture_screenshots"
+        private const val KEY_RECORD_LOCATION = "record_location"
+        private const val KEY_LOCATION_INTERVAL = "location_interval_seconds"
+
+        /** 位置情報の記録間隔の既定値と上下限（秒）。 */
+        const val DEFAULT_LOCATION_INTERVAL_SECONDS = 60
+        const val MIN_LOCATION_INTERVAL_SECONDS = 10
+        const val MAX_LOCATION_INTERVAL_SECONDS = 3600
+
+        /** 記録間隔を扱える範囲へ丸める。 */
+        fun clampLocationInterval(seconds: Int): Int =
+            seconds.coerceIn(MIN_LOCATION_INTERVAL_SECONDS, MAX_LOCATION_INTERVAL_SECONDS)
 
         /** config.env 側のキー。autolog の AUTOLOG_DEVICE と同じもの。 */
         private const val KEY_CONFIG_DEVICE = "AUTOLOG_DEVICE"

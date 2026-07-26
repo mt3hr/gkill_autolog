@@ -5,6 +5,7 @@ gkill_autolog/
 ├── README.md                概要と最短の導入手順
 ├── LICENSE                  MIT
 ├── CLAUDE.md                Claude Code 向けの案内
+├── package.json             ビルドの入口（npm スクリプト）
 ├── documents/
 │   └── reverse/             設計資料（このディレクトリ）
 └── src/
@@ -12,8 +13,12 @@ gkill_autolog/
     ├── autolog/             Go の CLI（収集・取り込み）
     ├── android/             Android 収集アプリ
     ├── chrome_ext/          Chrome 拡張
-    └── scripts/             PowerShell スクリプト
+    ├── scripts/             PowerShell スクリプト（設定・取り込み）
+    └── tools/               ビルドの小物（Node）
 ```
+
+gkill 本体と同じく、ビルドは `package.json` の npm スクリプトから行います。
+**Node が要るのはビルドのときだけ**で、動かすのに Node は要りません。
 
 gkill 本体と同じく、実装は `src/` の下に、資料は `documents/reverse/` に置きます。
 
@@ -85,10 +90,10 @@ android/app/src/main/java/com/mt3hr/gkill_autolog/
 ├── BootReceiver.kt        再起動後の再開
 ├── Config.kt              設定。端末名は config.env を優先する
 ├── SharedStorage.kt       /sdcard/gkill_autolog の場所
-├── collect/               各収集（アプリ利用・通知・メディア・システム・撮影）
-├── export/                JSONL の書き出し
+├── collect/               各収集（アプリ利用・通知・メディア・システム・撮影・位置情報）
+├── export/                JSONL と GPX の書き出し
 ├── model/Event.kt         生ログの1件
-└── store/EventStore.kt    書き出すまでの一時保管
+└── store/                 書き出すまでの一時保管（生ログ・位置情報）
 ```
 
 ## src/chrome_ext — Chrome 拡張
@@ -103,8 +108,6 @@ Service Worker は随時停止するので、イベントはいったん `chrome
 | スクリプト | 用途 |
 | --- | --- |
 | `_gkill_api.ps1` | 共通処理。gkill の API 呼び出し、設定ファイルの読み書き、パスの解決 |
-| `build.ps1` | この機械向けにビルドする |
-| `build_android.ps1` | Android (arm64) 向けにビルドして配布する |
 | `setup_auto_users.ps1` | 端末別ユーザーを作る |
 | `set_auto_password.ps1` | 端末別ユーザー共通のパスワードを設定する |
 | `set_password.ps1` | 単一ユーザー構成のパスワードを設定する |
@@ -116,6 +119,27 @@ Service Worker は随時停止するので、イベントはいったん `chrome
 スクリプトは UTF-8 (BOM 付き) で保存します。設定ファイルも同じです。
 BOM が無いと Windows PowerShell 5.1 が Shift_JIS として読み、
 日本語コメントの直後の行が黙って読み落とされます。
+
+ビルドはここではなく npm スクリプトが担います。
+
+## src/tools — ビルドの小物
+
+`package.json` の npm スクリプトから呼ばれます。
+
+| スクリプト | 用途 |
+| --- | --- |
+| `build_go.mjs` | 指定したプラットフォーム向けに autolog をビルドする |
+| `build_apk.mjs` | 収集アプリの APK を作る。バージョンは package.json から決まる |
+| `verify_release_artifacts.mjs` | 成果物が狙ったプラットフォーム向けか、中身を見て確かめる |
+| `deploy_android.mjs` | arm64 バイナリを Dropbox へ配る |
+
+### 成果物の中身を必ず確かめる
+
+クロスコンパイルは設定を1つ間違えるだけで、中身が別プラットフォームの
+バイナリのまま出来上がります。実際、Windows 上で NDK の clang を指定したときに
+Android 向けのつもりが Windows のバイナリ (MZ) になったことがあります。
+ファイル名では気づけないので、`verify_release_artifacts.mjs` が
+先頭バイトから形式と CPU を読んで検査します。
 
 ## 実行時に作られるもの
 
@@ -131,11 +155,23 @@ $AUTOLOG_HOME/                既定は %LOCALAPPDATA%\gkill_autolog
 └── logs/                     実行ログ
 ```
 
+ビルドの成果物は `release/` に出ます。
+
+```
+release/
+├── windows_amd64/autolog.exe
+├── linux_amd64/autolog, linux_arm64/autolog, linux_arm/autolog
+├── android_arm64/autolog     Termux で使う
+├── android_arm/autolog
+└── android_apk/gkill_autolog.apk
+```
+
 Android では共有ストレージも使います。
 
 ```
 /sdcard/gkill_autolog/
 ├── config.env                設定（収集アプリと autolog の両方が読む）
 ├── events/                   収集アプリが置く JSONL。autolog が読んで消す
+├── gpslog/                   日別の GPX。dvnf が GPSLogs へ運ぶ
 └── screenshots/              撮影した画像の置き場
 ```

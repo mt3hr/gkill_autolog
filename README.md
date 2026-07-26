@@ -18,6 +18,7 @@ PC・Android 端末・Chrome から**客観的な操作ログを自動で集め�
 | 再生した動画・音楽 | URLog |
 | 受け取った通知（Android） | Kmemo |
 | 毎時のスクリーンショット | IDF |
+| 位置情報（Android） | GPX |
 
 ### 記録されないもの
 

@@ -69,6 +69,17 @@ gkill の追加 API は書き込み先リポジトリを指定できないため
 端末ごとに書き分けるにはユーザーを分けるしかありません。
 詳しくは [design-philosophy.md](design-philosophy.md) を参照してください。
 
+### GPX
+
+位置情報の記録。日別に `YYYYMMDD.gpx` として書く。
+
+**ファイル名はこの形でなければならない。** gkill は日付からこの名前を
+組み立てて探すため、違う名前だと見つけられない
+（`gps_log_repository_gpx_dir_impl.go` の `findGPXFileByDate`）。
+日付はローカル日付で、中の時刻は UTC。
+
+生ログ (raw.db) には入れない。GPX が最終形で、`autolog import` は関与しない。
+
 ### 受け口 (inbox)
 
 Android で収集アプリと `autolog` が生ログを受け渡す場所 (`/sdcard/gkill_autolog/events/`)。
@@ -90,3 +101,4 @@ URLog にしない URL のパターンを書くファイル (`url_denylist.txt`)
 | ページ閲覧、動画・音楽の再生 | URLog（ブックマーク） |
 | 通知 | Kmemo（テキスト） |
 | スクリーンショット | IDF（ファイル） |
+| 位置情報 | GPX（gpslog rep として読まれる。Kyou にはならない） |
