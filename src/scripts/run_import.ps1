@@ -57,13 +57,30 @@ function Write-Log([string]$message) {
     Add-Content -Path $logFile -Value $line -Encoding utf8
 }
 
-# autolog.exe の場所。リポジトリ直下に置いてある想定。
+# autolog.exe を探す。
+#
+# npm run build の出力先を第一候補にする。
+# 昔はリポジトリ直下へ置いていたので、そちらと PATH も見る。
 $autolog = $env:AUTOLOG_EXE
-if (-not $autolog) { $autolog = Join-Path (Get-AutologRoot $PSScriptRoot) 'autolog.exe' }
-if (-not (Test-Path $autolog)) {
-    Write-Log "ERROR autolog.exe が見つからない: $autolog"
+if (-not $autolog) {
+    $root = Get-AutologRoot $PSScriptRoot
+    $candidates = @(
+        (Join-Path $root 'release/windows_amd64/autolog.exe')
+        (Join-Path $root 'autolog.exe')
+    )
+    $autolog = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+    if (-not $autolog) {
+        $onPath = Get-Command autolog -ErrorAction SilentlyContinue
+        if ($onPath) { $autolog = $onPath.Source }
+    }
+}
+
+if (-not $autolog -or -not (Test-Path $autolog)) {
+    Write-Log 'ERROR autolog.exe が見つからない。npm run build を実行すること'
+    Write-Log '  探した場所: $env:AUTOLOG_EXE / release/windows_amd64/ / リポジトリ直下 / PATH'
     exit 1
 }
+Write-Log "autolog: $autolog"
 
 # 書き込み先が決まっているか先に確かめる。
 # 未設定のまま走らせると、全件が失敗して原因が分かりにくい。
