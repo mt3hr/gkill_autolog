@@ -1,0 +1,114 @@
+# 開発環境の構築
+
+## 必要なもの
+
+| 対象 | 必要なもの |
+| --- | --- |
+| Go の CLI | Go 1.26 以上 |
+| Android アプリ | JDK 17、Android SDK (compileSdk 37) |
+| Chrome 拡張 | なし（そのまま読み込める） |
+| スクリプト | Windows PowerShell 5.1 または PowerShell 7 |
+
+CGO は使いません。SQLite は純 Go の実装なので、C コンパイラは要りません。
+
+## ビルド
+
+### この機械向け
+
+```powershell
+.\src\scripts\build.ps1
+```
+
+リポジトリ直下に `autolog.exe` ができます。取り込みスクリプトはこの場所を見ます。
+
+直接叩く場合は次のとおりです。
+
+```powershell
+cd src\autolog
+go build -o ..\..\autolog.exe .\cmd\autolog
+```
+
+### Android (arm64) 向け
+
+```powershell
+.\src\scripts\build_android.ps1            # ビルドして配布まで
+.\src\scripts\build_android.ps1 -SkipUpload # ビルドだけ
+```
+
+`release/autolog` ができます。出力が本当に ARM64 の ELF かをスクリプトが確認します。
+
+**`CGO_ENABLED=0` が必要です。** Windows 上で NDK の clang を指定すると、
+Go がネイティブのコンパイラへ切り替わり、中身が Windows のバイナリ (MZ) のまま
+出来上がることがあります。
+
+### Android アプリ
+
+```powershell
+cd src\android
+.\gradlew.bat --% assembleDebug -PversionName=1.0.0 -PversionCode=10000
+```
+
+PowerShell からハイフンを含む値を渡すときは `--%` が要ります。
+付けないと PowerShell が引数として解釈します。
+
+## テスト
+
+```powershell
+cd src\autolog
+go test ./...
+```
+
+`internal/normalize` のテストが最も重要です。閾値・結合・持ち越しの境界値を検証しています。
+
+Android 向けにビルドが通ることも確認してください。
+
+```powershell
+cd src\autolog
+$env:CGO_ENABLED='0'; $env:GOOS='android'; $env:GOARCH='arm64'
+go vet ./...
+```
+
+## コードの書き方
+
+gkill 本体に合わせています。
+
+- コメントは日本語
+- `slices.SortFunc`（`sort.Slice` は使わない）
+- `for range n`（`for i := 0; i < n; i++` は使わない）
+- `any`（`interface{}` は使わない）
+- 複数のエラーをまとめるときは `errors.Join`
+
+### 端末名や利用者名をコードに書かない
+
+設定で決めます。既定値も置きません。
+コードに書くと、他の人がそのまま使えなくなります。
+
+### PowerShell スクリプト
+
+**UTF-8 (BOM 付き) で保存してください。** 設定ファイルも同じです。
+
+BOM が無いと Windows PowerShell 5.1 が Shift_JIS として読みます。
+日本語コメントのバイト列が2バイト文字として解釈されると、
+その2バイト目が改行を飲み込み、**次の行がコメント行に連結されて消えます。**
+
+5.1 と 7 の差で踏みやすい点が他にもあります。
+
+| 事象 | 対処 |
+| --- | --- |
+| `-SkipCertificateCheck` が無い (5.1) | `_gkill_api.ps1` の `Invoke-GkillApi` を使う |
+| `-File` 起動で param ブロックの `$PSScriptRoot` が空 (5.1) | 既定値は param に書かず本体で解決する |
+| `2>&1` した native コマンドの stderr が終了エラーになる (5.1) | 呼び出しの間だけ `$ErrorActionPreference='Continue'` にし、終了コードで判定する |
+| 子プロセスの UTF-8 出力が化ける (5.1) | 呼び出しの間だけ `[Console]::OutputEncoding` を UTF-8 にする |
+
+いずれも PowerShell 7 では起きないので、**5.1 で確認してください。**
+
+```powershell
+powershell.exe -NoProfile -File .\src\scripts\check_connection.ps1
+```
+
+## 本番を壊さないための注意
+
+- gkill の設定を書き換える API (`update_user_reps` など) は全件置換です。手で使わないでください
+- 検証は別のホームディレクトリと別のポートで起動した gkill に対して行います
+  （[testing-guide.md](testing-guide.md) 参照）
+- gkill のログインは IP ごとに 15 分で 10 回までです。確認スクリプトの連打に注意してください

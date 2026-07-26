@@ -1,0 +1,226 @@
+# 実装仕様
+
+パッケージの責務とデータの流れをまとめます。
+なぜそうしたかは [design-philosophy.md](design-philosophy.md) を参照してください。
+
+## データの流れ
+
+```
+[収集]                    [保管]              [整理]           [書き込み]
+Windows collect ──┐
+Chrome 拡張 ──────┼──→  raw.db  ──→  normalize  ──→  gkill HTTP API
+Android アプリ ───┘    (追記専用)      (提案)         (端末別ユーザー)
+   └→ JSONL → inbox                                      │
+                                                    ledger.db
+                                                    (書き込み済み)
+```
+
+スクリーンショットだけは別経路です。撮って置き場に保存し、
+gkill へ入れるのは同期スクリプトと `gkill_server idf` が行います。
+
+## サブコマンド
+
+| コマンド | 何をするか |
+| --- | --- |
+| `autolog collect` | 常駐して集める。Chrome 拡張の受け口も開く |
+| `autolog import` | 生ログを整理して gkill へ取り込む |
+| `autolog screenshot` | スクリーンショットを1枚撮る |
+| `autolog status` | 生ログの溜まり具合と処理カーソルを表示する |
+
+### autolog import の流れ
+
+1. 共有ディレクトリの JSONL を生ログへ取り込む（Android のみ。`inbox`）
+2. 処理カーソル 〜 上限時刻の生ログを読む
+3. `normalize` で提案を作る
+4. 台帳にある提案を除く
+5. 端末ごとに gkill へログインして書き込む
+6. 書き込めた分を台帳へ記録する
+7. 処理カーソルを進める（失敗した提案の手前まで引き戻す）
+
+`--dry-run` を付けると 5〜7 を行いません。受け口の JSONL も消しません。
+
+## internal/rawlog — 生ログ
+
+追記専用の SQLite。単一テーブルです。
+
+```sql
+CREATE TABLE raw_event (
+  schema_version INTEGER NOT NULL,
+  event_id       TEXT NOT NULL,   -- 端末内で一意
+  device         TEXT NOT NULL,
+  event_type     TEXT NOT NULL,
+  start_time     TEXT NOT NULL,   -- RFC3339
+  end_time       TEXT,
+  captured_at    TEXT NOT NULL,
+  payload        TEXT NOT NULL    -- JSON。加工前の値
+);
+CREATE UNIQUE INDEX idx_raw_event_id ON raw_event(device, event_id);
+```
+
+### 時刻は必ずローカルへ揃えてから保存する
+
+`storageTime()` が保存直前に `time.Local` へ変換します。
+
+時刻を文字列で持ち `ORDER BY start_time` で並べるため、
+オフセットが混ざると辞書順が時刻順と一致しなくなります。
+Chrome 拡張や Android は UTC (末尾 Z) で送ってくることがあるので、
+入口ではなく保存の直前で揃えます。
+
+### イベントの種類
+
+| event_type | 内容 |
+| --- | --- |
+| `input` | クリック・ホイール・キー入力を伴う前面ウィンドウ。マウス移動では出さない |
+| `session` | 端末の利用状態の変化（ロック解除、ロック、電源） |
+| `wifi` | Wi-Fi の接続・切断。SSID のみ。BSSID は持たない |
+| `bluetooth` | Bluetooth 機器の接続・切断 |
+| `power` | 充電の開始・終了。残量は持たない |
+| `browser_view` | ブラウザでのページ表示 |
+| `media_play` | 動画・音楽の再生（実再生時間つき） |
+| `app_usage` | アプリの利用 |
+| `notification` | 通知 |
+
+## internal/normalize — 整理
+
+生ログを提案へ変換します。**ここが本システムの中核**です。
+
+外部に依存しない純粋な処理なので、入力を並べれば結果が決まります。
+境界値の単体テストを厚く書いてあります。
+
+### 閾値
+
+要件で決めた値です。根拠は [requirements.md](requirements.md) にあります。
+
+| 定数 | 値 | 用途 |
+| --- | --- | --- |
+| `IdleTimeout` | 5分 | これだけ入力が無ければウィンドウのセッションを終える |
+| `WindowMergeWindow` | 1分 | この時間内に元のウィンドウへ戻ったら前後を結合する |
+| `MinWindowDuration` | 1分 | これ未満のウィンドウ操作は記録しない |
+| `MinViewDuration` | 30秒 | これ未満の閲覧は記録しない |
+| `MinPlayedSeconds` | 30秒 | これ未満しか再生していないものは記録しない |
+| `MinAppUsage` | 30秒 | これ未満のアプリ利用は記録しない |
+| `WifiMergeWindow` | 30秒 | この時間内の再接続を結合する |
+| `BluetoothMergeWindow` | 1分 | 同上 |
+| `ChargeMergeWindow` | 30秒 | 同上 |
+| `NotificationDedupeWindow` | 5分 | この時間内の同内容の再通知を1件にまとめる |
+
+### セッションの終わりは「最後の入力時刻」
+
+5分無入力でセッションを終えますが、終了時刻は**アイドルと判定した時刻ではなく
+最後に入力があった時刻**です。触っていない5分間を記録に含めません。
+
+### 継続中のセッションは持ち越す
+
+上限時刻の時点でまだ終わっていないセッションは提案にしません。
+処理カーソルもその開始時刻より先へは進めません。次回まとめて処理します。
+
+### 提案の ID は決定的
+
+`makeID(種別, 収集元, 元イベントID群)` を sha256 で計算します。
+同じ生ログからは常に同じ ID が出るので、台帳での重複判定に使えます。
+
+### 動画・音楽はブラウザ経路から除く
+
+動画サイトの URL はメディアとして記録するため、ブラウザ閲覧の経路からは除きます。
+判定はホスト名で行います（URL に文字列が含まれるかで判定すると誤爆します）。
+
+## internal/gkillclient — gkill への書き込み
+
+純 Go の `net/http` だけを使います。
+
+| 用途 | エンドポイント |
+| --- | --- |
+| ログイン | `POST /api/login` |
+| TimeIs | `POST /api/add_timeis` |
+| URLog | `POST /api/add_urlog` |
+| Kmemo | `POST /api/add_kmemo` |
+| タグ | `POST /api/add_tag` |
+
+### 応答は必ず中身を見る
+
+gkill は異常時も HTTP 200 を返し、本文の `errors` にエラーを載せます。
+ステータスコードだけを見ていると失敗を見落とします。
+
+### 端末名は自分で設定する
+
+エンティティを丸ごと送るので、`create_app` に `gkill_autolog`、
+`create_device` に端末名が入ります。
+
+`rep_name` は送っても無視されます（追加ユースケースが書き込み用リポジトリ固定のため）。
+書き分けは端末別ユーザーで行います。
+
+### ログインの失敗は繰り返さない
+
+一度失敗したら、その実行中はもう試みません。
+gkill のログインは IP ごとに 15 分で 10 回までなので、
+提案ごとに再試行すると上限を使い潰して復帰を遅らせます。
+
+書けなかった分は台帳に載らないので、次回やり直されます。
+
+### URLog は1秒に1件
+
+gkill が `add_urlog` のたびに対象 URL を取得しに行くためです。
+タイトルは必ず自分で埋めて送ります。
+
+## internal/inbox — Android からの受け渡し
+
+共有ディレクトリの `*.jsonl` を読んで生ログへ入れます。
+
+- `.jsonl` だけを読みます。書きかけの `.jsonl.tmp` は読みません
+- 取り込めたファイルは消します。消す前に落ちても、生ログ側が重複を弾くので壊れません
+- 1行が壊れていても、他の行は取り込みます
+- 端末名が許可されていなければその行だけ捨てます
+
+## internal/ingest — Chrome 拡張の受け口
+
+`POST /ingest` のみ。127.0.0.1 だけに bind します。
+`Authorization: Bearer <token>` を要求します。
+
+トークンは初回起動時に生成して `$AUTOLOG_HOME/ingest_token.txt` に保存します。
+
+端末をまたぐ受け口は持ちません。
+
+## internal/config — 設定
+
+優先順位は次のとおりです。
+
+1. 環境変数
+2. `$AUTOLOG_HOME/config.env`
+3. 共有ディレクトリの `config.env`（Android のみ）
+4. 既定値
+
+設定ファイルは KEY=VALUE 形式です。`#` で始まる行と空行は無視します。
+先頭の BOM は取り除きます。
+
+### 端末名の既定値
+
+未設定ならこの機械のホスト名を使います。
+端末名に使えない文字（アンダースコア、空白、ドット）は落とします。
+
+コードに端末名は書きません。
+
+### タイムゾーン (Android)
+
+`timezone_android.go` がシステム設定からタイムゾーンを読み、`time.Local` に入れます。
+`main()` の先頭で、他の処理より先に実行します。
+
+Android 以外では何もしません。
+
+## Android アプリ
+
+### 端末名は config.env が優先
+
+アプリの設定と `config.env` の両方に端末名を持つと食い違います。
+`config.env` を正とし、起動時にアプリの設定へ反映します。
+
+### 書き出しは排他する
+
+常駐サービスと WorkManager の両方から呼ばれるため、プロセス内で排他します。
+これが無いと、同じ内容の JSONL が二重に書き出されます。
+
+### スクリーンショットの更新時刻
+
+保存後に更新時刻を撮影時刻へ合わせます。
+gkill の IDF は更新時刻を記録時刻として使うためです。
+
+root の `screencap` を使います。root が無い端末では撮れません。

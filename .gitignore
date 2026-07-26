@@ -1,0 +1,52 @@
+# ---------------------------------------------------------------- 機密
+# パスワードのハッシュを含む。雛形の autolog.env.example だけを追跡する。
+autolog.env
+# 共有トークン（通常は $AUTOLOG_HOME に作られるが、念のため）
+ingest_token.txt
+
+# ---------------------------------------------------------------- ビルド成果物
+*.exe
+*.exe~
+*.test
+*.dll
+*.so
+*.dylib
+# build_android.ps1 が出す android/arm64 バイナリ。
+# 拡張子が無いのでディレクトリごと指定する。
+/release/
+
+# Go のローカルワークスペース。環境ごとに違うので共有しない。
+go.work
+go.work.sum
+
+# ---------------------------------------------------------------- 実行時に作られるもの
+# 生ログ・台帳・受け渡しの JSONL。
+# 通常は $AUTOLOG_HOME（リポジトリ外）に作られるが、
+# そこをリポジトリ内に向けても混入しないようにしておく。
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+*.jsonl
+work/
+logs/
+*.log
+
+# ---------------------------------------------------------------- Android
+/src/android/local.properties
+/src/android/.gradle/
+/src/android/.kotlin/
+/src/android/.cxx/
+/src/android/captures/
+/src/android/**/build/
+*.apk
+*.aab
+*.iml
+
+# ---------------------------------------------------------------- エディタ・OS
+.idea/
+.vscode/
+.claude/
+.DS_Store
+*.swp
+*~

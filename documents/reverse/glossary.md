@@ -1,0 +1,92 @@
+# 用語集
+
+gkill_autolog の資料全体で使う語をまとめます。
+gkill 本体の用語は [gkill の用語集](https://github.com/mt3hr/gkill/blob/main/documents/reverse/glossary.md) を参照してください。
+
+## 中心となる語
+
+### 生ログ (raw log / raw event)
+
+収集プログラムが観測した事実そのもの。加工前の値を保持します。
+
+追記専用の SQLite (`raw.db`) に貯めます。**消しません。**
+取り込みの規則を変えたときに、過去に遡って作り直せるようにするためです。
+
+`(端末名, event_id)` で一意。同じイベントを二度入れても増えないので、
+再送や再取り込みで壊れません。
+
+スキーマは [`src/autolog/schema/event.schema.json`](../../src/autolog/schema/event.schema.json) にあります。
+
+### 提案 (proposal)
+
+生ログから作った「gkill へこう書き込む」という案。
+
+`normalize` が決定的なルールだけで作ります。同じ生ログからは常に同じ提案が出ます。
+提案の ID は元になった生ログの ID から計算するので、
+何度作り直しても同じ値になり、台帳での重複判定に使えます。
+
+### 台帳 (ledger)
+
+「この提案はもう書き込んだ」という記録 (`ledger.db`)。
+
+`提案ID → Kyou の ID` を持ちます。
+**書き込みに成功した分だけ**記録するので、失敗した分は次回やり直されます。
+
+### 処理カーソル (cursor)
+
+「ここまでは処理した」という位置。
+
+書き込みに失敗した提案があれば、その手前まで引き戻します。
+継続中のセッション（まだ終わっていないウィンドウ操作など）の開始時刻より先へは進めません。
+
+### 収集元 (source)
+
+どの観測から来たかを表す区分。書き込む Kyou にタグとして付きます。
+
+| タグ | 何を観測したか |
+| --- | --- |
+| `autolog_device` | 端末そのものの利用（ロック解除〜ロック） |
+| `autolog_window` | 前面ウィンドウ／前面アプリ |
+| `autolog_browser` | ブラウザでのページ閲覧 |
+| `autolog_media` | 動画・音楽の再生 |
+| `autolog_wifi` | Wi-Fi の接続 |
+| `autolog_bluetooth` | Bluetooth 機器の接続 |
+| `autolog_charge` | 充電 |
+| `autolog_notification` | 通知 |
+
+### 端末名 (device)
+
+どの端末で観測したかを表す名前。gkill の端末名と揃えます。
+
+`<名前>_<端末名>_<日付>` という形のディレクトリ名に使うため、
+**アンダースコアと空白は使えません。**
+
+### 端末別ユーザー
+
+端末ごとに用意する gkill のユーザー (`<接頭辞><端末名>`)。
+
+gkill の追加 API は書き込み先リポジトリを指定できないため、
+端末ごとに書き分けるにはユーザーを分けるしかありません。
+詳しくは [design-philosophy.md](design-philosophy.md) を参照してください。
+
+### 受け口 (inbox)
+
+Android で収集アプリと `autolog` が生ログを受け渡す場所 (`/sdcard/gkill_autolog/events/`)。
+
+追記専用の JSONL を置きます。SQLite は置きません（理由は design-philosophy）。
+
+### 除外リスト (deny list)
+
+URLog にしない URL のパターンを書くファイル (`url_denylist.txt`)。
+
+何を残すかの判断はすべてこのファイルで決まります。
+判断を人にも AI にも都度求めません。
+
+## Kyou の種類との対応
+
+| 観測したこと | gkill での記録 |
+| --- | --- |
+| 端末の利用、ウィンドウ操作、アプリ利用、Wi-Fi、Bluetooth、充電 | TimeIs（時間区間） |
+| ページ閲覧、動画・音楽の再生 | URLog（ブックマーク） |
+| 通知 | Kmemo（テキスト） |
+| スクリーンショット | IDF（ファイル） |

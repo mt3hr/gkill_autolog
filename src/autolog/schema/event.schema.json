@@ -1,0 +1,168 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/mt3hr/gkill_autolog/schema/event.schema.json",
+  "title": "gkill_autolog 共通生ログイベント",
+  "description": "各端末の収集プログラムが出力し、raw.db へ蓄積される追記専用イベント。加工前の生値を保持する。",
+  "type": "object",
+  "required": ["schema_version", "event_id", "device", "event_type", "start_time", "captured_at", "payload"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "event_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "端末内で一意なID。再送時の重複排除に使うため、同じ事実には同じIDを付けること。"
+    },
+    "device": {
+      "type": "string",
+      "pattern": "^[^_\\s/\\\\:*?\"<>|]{1,64}$",
+      "description": "収集元の端末名。gkill の端末名と揃える。区切りに使うためアンダースコアと空白は使えない。"
+    },
+    "event_type": {
+      "type": "string",
+      "enum": [
+        "input",
+        "session",
+        "wifi",
+        "bluetooth",
+        "power",
+        "browser_view",
+        "media_play",
+        "app_usage",
+        "notification"
+      ]
+    },
+    "start_time": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC3339。瞬間イベントでは発生時刻。"
+    },
+    "end_time": {
+      "type": ["string", "null"],
+      "format": "date-time",
+      "description": "期間イベントの終了時刻。瞬間イベントおよび継続中は null。"
+    },
+    "captured_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "収集プログラムがこのイベントを確定した時刻。"
+    },
+    "payload": {
+      "type": "object",
+      "description": "event_type ごとの内容。下の $defs を参照。"
+    }
+  },
+  "$defs": {
+    "input": {
+      "title": "input — 操作を伴うアクティブウィンドウ",
+      "description": "クリック・ホイール・キー入力の発生時に1件。マウス移動だけでは出さない。end_time は null。",
+      "type": "object",
+      "required": ["app_name", "window_title"],
+      "properties": {
+        "app_name": { "type": "string", "description": "実行ファイル名から拡張子を除いたもの (例: chrome, Code)。" },
+        "window_title": { "type": "string", "description": "前面ウィンドウの完全なタイトル。整形しない。" },
+        "process_path": { "type": "string" },
+        "pid": { "type": "integer" },
+        "kind": { "type": "string", "enum": ["click", "wheel", "key"] }
+      }
+    },
+    "session": {
+      "title": "session — 端末の利用状態",
+      "description": "Windows のロック/解除/ログオン/ログオフ/電源、Android の解除/画面オフ。end_time は null。",
+      "type": "object",
+      "required": ["action"],
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": ["logon", "unlock", "lock", "logoff", "shutdown", "suspend", "resume", "screen_off", "collector_start", "collector_stop"]
+        },
+        "recovered": {
+          "type": "boolean",
+          "description": "収集プログラムの異常終了後に、最終入力時刻から復元した終了イベントであることを示す。"
+        }
+      }
+    },
+    "wifi": {
+      "title": "wifi — Wi-Fi 接続状態",
+      "description": "SSID 単位。BSSID は生ログにも保持しない。有線LANは対象外。",
+      "type": "object",
+      "required": ["ssid", "connected"],
+      "properties": {
+        "ssid": { "type": "string" },
+        "connected": { "type": "boolean" }
+      }
+    },
+    "bluetooth": {
+      "title": "bluetooth — Bluetooth 接続状態",
+      "type": "object",
+      "required": ["device_name", "connected"],
+      "properties": {
+        "device_name": { "type": "string", "description": "機器名。アドレスは gkill へ出さない。" },
+        "connected": { "type": "boolean" }
+      }
+    },
+    "power": {
+      "title": "power — 充電状態",
+      "description": "残量・充電方式は記録しない。",
+      "type": "object",
+      "required": ["charging"],
+      "properties": {
+        "charging": { "type": "boolean" }
+      }
+    },
+    "browser_view": {
+      "title": "browser_view — ブラウザの1回の連続閲覧",
+      "description": "タブが前面になってから離れるまで。start_time/end_time が閲覧区間。",
+      "type": "object",
+      "required": ["url", "title"],
+      "properties": {
+        "url": { "type": "string", "description": "表示していたURLそのまま。" },
+        "title": { "type": "string", "description": "ページタイトルそのまま。" },
+        "tab_id": { "type": "integer" },
+        "window_id": { "type": "integer" },
+        "browser_focused": { "type": "boolean", "description": "この区間中ブラウザウィンドウが前面だったか。" },
+        "source": { "type": "string", "enum": ["chrome_extension", "chrome_history_db"] }
+      }
+    },
+    "media_play": {
+      "title": "media_play — YouTube / YouTube Music の1回の再生",
+      "description": "実再生秒数は一時停止時間と広告再生時間を含めない。URLが確定できない場合は url を空にし、書き込み対象から外れる。",
+      "type": "object",
+      "required": ["service", "played_seconds"],
+      "properties": {
+        "service": { "type": "string", "enum": ["youtube", "youtube_music"] },
+        "url": { "type": "string", "description": "個別コンテンツの正式URL。推測・検索URLの生成は禁止。不明なら空文字。" },
+        "video_id": { "type": "string" },
+        "title": { "type": "string", "description": "取得できた正式タイトル。" },
+        "artist": { "type": "string" },
+        "played_seconds": { "type": "number", "minimum": 0 }
+      }
+    },
+    "app_usage": {
+      "title": "app_usage — Android のアプリ利用区間",
+      "type": "object",
+      "required": ["app_label"],
+      "properties": {
+        "app_label": { "type": "string", "description": "表示上のアプリ名。gkill へはこれだけを出す。" },
+        "package_name": { "type": "string", "description": "内部識別用。gkill へは出さない。" },
+        "split_screen": { "type": "boolean" }
+      }
+    },
+    "notification": {
+      "title": "notification — Android の通知",
+      "type": "object",
+      "required": ["app_label"],
+      "properties": {
+        "app_label": { "type": "string" },
+        "package_name": { "type": "string", "description": "内部識別用。gkill へは出さない。" },
+        "title": { "type": "string" },
+        "body": { "type": "string" },
+        "notification_key": { "type": "string", "description": "同一通知の更新をまとめるためのキー。" },
+        "ongoing": { "type": "boolean", "description": "常駐通知。true のものは書き込み対象外。" }
+      }
+    }
+  }
+}

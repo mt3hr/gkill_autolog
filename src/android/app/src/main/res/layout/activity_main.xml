@@ -1,0 +1,118 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  ステータスバーとナビゲーションバーの下に隠れないよう、
+  余白は MainActivity が WindowInsets から計算して入れる。
+  targetSdk 35 以降は端から端まで描画するのが既定になり、
+  padding を固定値にすると上部がアプリバーに隠れる。
+
+  clipToPadding は既定の true のままにする。
+  false にすると、スクロールした中身が余白の部分にも描かれ、
+  ステータスバーの裏を文字が通り抜けてしまう。
+-->
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/root_scroll"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <LinearLayout
+        android:id="@+id/content"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="16dp">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/label_device" />
+
+        <EditText
+            android:id="@+id/device"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:autofillHints=""
+            android:inputType="text" />
+
+        <CheckBox
+            android:id="@+id/read_chrome_history"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="@string/label_read_chrome_history" />
+
+        <CheckBox
+            android:id="@+id/capture_screenshots"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/label_capture_screenshots" />
+
+        <Button
+            android:id="@+id/save"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="@string/action_save" />
+
+        <Button
+            android:id="@+id/start"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/action_start" />
+
+        <Button
+            android:id="@+id/stop"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/action_stop" />
+
+        <Button
+            android:id="@+id/export_now"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/action_export_now" />
+
+        <TextView
+            android:id="@+id/status"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:fontFamily="monospace" />
+
+        <Button
+            android:id="@+id/permission_storage"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="@string/permission_storage" />
+
+        <Button
+            android:id="@+id/permission_usage"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/permission_usage" />
+
+        <Button
+            android:id="@+id/permission_notification"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/permission_notification" />
+
+        <Button
+            android:id="@+id/permission_accessibility"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/permission_accessibility" />
+
+        <Button
+            android:id="@+id/permission_location"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/permission_location" />
+
+        <Button
+            android:id="@+id/permission_battery"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/permission_battery" />
+    </LinearLayout>
+</ScrollView>

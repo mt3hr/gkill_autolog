@@ -1,0 +1,332 @@
+package rawlog
+
+import (
+	"context"
+	"path/filepath"
+	"testing"
+	"time"
+)
+
+func openTestStore(t *testing.T) *Store {
+	t.Helper()
+	store, err := OpenStore(filepath.Join(t.TempDir(), "raw.db"))
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	t.Cleanup(func() { store.Close() })
+	return store
+}
+
+func mustEvent(t *testing.T, id string, device Device, eventType EventType, start time.Time, end *time.Time, payload any) *Event {
+	t.Helper()
+	e, err := NewEvent(id, device, eventType, start, end, payload)
+	if err != nil {
+		t.Fatalf("NewEvent(%s): %v", id, err)
+	}
+	return e
+}
+
+func baseTime() time.Time {
+	return time.Date(2026, 7, 25, 10, 0, 0, 0, time.FixedZone("JST", 9*60*60))
+}
+
+func TestPutIsIdempotentPerDeviceAndEventID(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	now := baseTime()
+
+	e := mustEvent(t, "ev-1", Device("Laptop"), EventInput, now, nil,
+		InputPayload{AppName: "chrome", WindowTitle: "gkill MCP Server - Google Chrome"})
+
+	inserted, err := store.Put(ctx, e)
+	if err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	if !inserted {
+		t.Fatal("最初の Put が false を返した")
+	}
+
+	// 同じ event_id を再投入しても増えないこと（Android・Chrome拡張の再送を想定）。
+	inserted, err = store.Put(ctx, e)
+	if err != nil {
+		t.Fatalf("Put(2回目): %v", err)
+	}
+	if inserted {
+		t.Error("同一 (device, event_id) の再投入で true が返った")
+	}
+
+	// 端末が違えば別イベントとして入ること。
+	other := mustEvent(t, "ev-1", Device("Phone"), EventInput, now, nil,
+		InputPayload{AppName: "chrome", WindowTitle: "同じIDだが別端末"})
+	inserted, err = store.Put(ctx, other)
+	if err != nil {
+		t.Fatalf("Put(別端末): %v", err)
+	}
+	if !inserted {
+		t.Error("端末が異なるのに重複扱いされた")
+	}
+
+	events, err := store.Range(ctx, RangeQuery{})
+	if err != nil {
+		t.Fatalf("Range: %v", err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("件数 = %d, want 2", len(events))
+	}
+}
+
+func TestPutBatchRejectsInvalidEventWithoutPartialWrite(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	now := baseTime()
+
+	valid := mustEvent(t, "ok-1", Device("Laptop"), EventPower, now, nil, PowerPayload{Charging: true})
+	invalid := mustEvent(t, "", Device("Laptop"), EventPower, now, nil, PowerPayload{Charging: false})
+
+	if _, err := store.PutBatch(ctx, []*Event{valid, invalid}); err == nil {
+		t.Fatal("不正なイベントを含む PutBatch がエラーを返さなかった")
+	}
+
+	events, err := store.Range(ctx, RangeQuery{})
+	if err != nil {
+		t.Fatalf("Range: %v", err)
+	}
+	if len(events) != 0 {
+		t.Errorf("検証に失敗したのに %d 件書き込まれた", len(events))
+	}
+}
+
+func TestRangeFiltersAndOrders(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	now := baseTime()
+
+	end := now.Add(30 * time.Minute)
+	events := []*Event{
+		mustEvent(t, "b-later", Device("Laptop"), EventInput, now.Add(2*time.Hour), nil,
+			InputPayload{AppName: "Code", WindowTitle: "main.go - gkill - Visual Studio Code"}),
+		mustEvent(t, "a-earlier", Device("Laptop"), EventBrowserView, now, &end,
+			BrowserViewPayload{URL: "https://example.com/", Title: "Example", BrowserFocused: true}),
+		mustEvent(t, "c-android", Device("Phone"), EventNotification, now.Add(time.Hour), nil,
+			NotificationPayload{AppLabel: "Gmail", Title: "件名", Body: "本文"}),
+	}
+	if _, err := store.PutBatch(ctx, events); err != nil {
+		t.Fatalf("PutBatch: %v", err)
+	}
+
+	t.Run("時刻順に返る", func(t *testing.T) {
+		got, err := store.Range(ctx, RangeQuery{})
+		if err != nil {
+			t.Fatalf("Range: %v", err)
+		}
+		want := []string{"a-earlier", "c-android", "b-later"}
+		if len(got) != len(want) {
+			t.Fatalf("件数 = %d, want %d", len(got), len(want))
+		}
+		for i, id := range want {
+			if got[i].EventID != id {
+				t.Errorf("[%d] = %s, want %s", i, got[i].EventID, id)
+			}
+		}
+	})
+
+	t.Run("端末で絞れる", func(t *testing.T) {
+		got, err := store.Range(ctx, RangeQuery{Devices: []Device{Device("Phone")}})
+		if err != nil {
+			t.Fatalf("Range: %v", err)
+		}
+		if len(got) != 1 || got[0].EventID != "c-android" {
+			t.Fatalf("got %+v", got)
+		}
+	})
+
+	t.Run("種別で絞れる", func(t *testing.T) {
+		got, err := store.Range(ctx, RangeQuery{Types: []EventType{EventInput, EventBrowserView}})
+		if err != nil {
+			t.Fatalf("Range: %v", err)
+		}
+		if len(got) != 2 {
+			t.Fatalf("件数 = %d, want 2", len(got))
+		}
+	})
+
+	t.Run("Toは境界を含まない", func(t *testing.T) {
+		got, err := store.Range(ctx, RangeQuery{From: now, To: now.Add(time.Hour)})
+		if err != nil {
+			t.Fatalf("Range: %v", err)
+		}
+		if len(got) != 1 || got[0].EventID != "a-earlier" {
+			t.Fatalf("got %+v", got)
+		}
+	})
+}
+
+func TestRangeRestoresEndTimeAndPayload(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	now := baseTime()
+	end := now.Add(45 * time.Second)
+
+	want := BrowserViewPayload{
+		URL:            "https://www.youtube.com/watch?v=abc123",
+		Title:          "タイトル",
+		TabID:          7,
+		WindowID:       2,
+		BrowserFocused: true,
+		Source:         "chrome_extension",
+	}
+	if _, err := store.Put(ctx, mustEvent(t, "view-1", Device("Laptop"), EventBrowserView, now, &end, want)); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+
+	got, err := store.Range(ctx, RangeQuery{})
+	if err != nil {
+		t.Fatalf("Range: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("件数 = %d, want 1", len(got))
+	}
+	if got[0].EndTime == nil {
+		t.Fatal("end_time が復元されなかった")
+	}
+	if !got[0].EndTime.Equal(end) {
+		t.Errorf("end_time = %s, want %s", got[0].EndTime, end)
+	}
+
+	payload, err := DecodePayload[BrowserViewPayload](got[0])
+	if err != nil {
+		t.Fatalf("DecodePayload: %v", err)
+	}
+	if payload != want {
+		t.Errorf("payload = %+v, want %+v", payload, want)
+	}
+}
+
+func TestNilEndTimeStaysNil(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+
+	if _, err := store.Put(ctx, mustEvent(t, "in-1", Device("Laptop"), EventInput, baseTime(), nil,
+		InputPayload{AppName: "chrome", WindowTitle: "t"})); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+
+	got, err := store.Range(ctx, RangeQuery{})
+	if err != nil {
+		t.Fatalf("Range: %v", err)
+	}
+	if got[0].EndTime != nil {
+		t.Errorf("end_time = %v, want nil", got[0].EndTime)
+	}
+}
+
+func TestLastEventTime(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	now := baseTime()
+
+	_, ok, err := store.LastEventTime(ctx, Device("Laptop"), EventInput)
+	if err != nil {
+		t.Fatalf("LastEventTime: %v", err)
+	}
+	if ok {
+		t.Error("空のストアで ok = true が返った")
+	}
+
+	for i, offset := range []time.Duration{0, 5 * time.Minute, 2 * time.Minute} {
+		e := mustEvent(t, string(rune('a'+i)), Device("Laptop"), EventInput, now.Add(offset), nil,
+			InputPayload{AppName: "chrome", WindowTitle: "t"})
+		if _, err := store.Put(ctx, e); err != nil {
+			t.Fatalf("Put: %v", err)
+		}
+	}
+
+	got, ok, err := store.LastEventTime(ctx, Device("Laptop"), EventInput)
+	if err != nil {
+		t.Fatalf("LastEventTime: %v", err)
+	}
+	if !ok {
+		t.Fatal("ok = false")
+	}
+	// 投入順ではなく start_time の最大を返すこと。
+	if want := now.Add(5 * time.Minute); !got.Equal(want) {
+		t.Errorf("LastEventTime = %s, want %s", got, want)
+	}
+}
+
+// Chrome 拡張と Android は UTC (末尾 Z) で送ってくることがある。
+// 保存時にローカル時刻へ揃えないと、文字列比較の ORDER BY が時刻順にならない。
+func TestEventsFromDifferentOffsetsAreOrderedCorrectly(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+
+	jst := time.FixedZone("JST", 9*60*60)
+	// 同じ瞬間を別のオフセットで表したもの。UTC 側が 1 分だけ後。
+	local := time.Date(2026, 7, 25, 21, 0, 0, 0, jst)
+	utc := local.Add(time.Minute).UTC()
+
+	events := []*Event{
+		mustEvent(t, "utc-later", Device("Laptop"), EventBrowserView, utc, nil,
+			BrowserViewPayload{URL: "https://example.com/later", Title: "後"}),
+		mustEvent(t, "local-earlier", Device("Laptop"), EventInput, local, nil,
+			InputPayload{AppName: "chrome", WindowTitle: "先"}),
+	}
+	if _, err := store.PutBatch(ctx, events); err != nil {
+		t.Fatalf("PutBatch: %v", err)
+	}
+
+	got, err := store.Range(ctx, RangeQuery{})
+	if err != nil {
+		t.Fatalf("Range: %v", err)
+	}
+	want := []string{"local-earlier", "utc-later"}
+	for i, id := range want {
+		if got[i].EventID != id {
+			t.Errorf("[%d] = %s, want %s (オフセット違いで順序が壊れている)", i, got[i].EventID, id)
+		}
+	}
+
+	// 範囲指定もオフセットをまたいで正しく効くこと。
+	inRange, err := store.Range(ctx, RangeQuery{From: local.Add(30 * time.Second).UTC()})
+	if err != nil {
+		t.Fatalf("Range: %v", err)
+	}
+	if len(inRange) != 1 || inRange[0].EventID != "utc-later" {
+		t.Errorf("From で絞った結果 = %+v, want utc-later のみ", inRange)
+	}
+}
+
+func TestCursorRoundTrip(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+
+	if _, ok, err := store.GetCursor(ctx, CursorNormalize); err != nil {
+		t.Fatalf("GetCursor: %v", err)
+	} else if ok {
+		t.Error("未設定のカーソルで ok = true が返った")
+	}
+
+	first := baseTime()
+	if err := store.SetCursor(ctx, CursorNormalize, first); err != nil {
+		t.Fatalf("SetCursor: %v", err)
+	}
+	got, ok, err := store.GetCursor(ctx, CursorNormalize)
+	if err != nil {
+		t.Fatalf("GetCursor: %v", err)
+	}
+	if !ok || !got.Equal(first) {
+		t.Fatalf("GetCursor = %s (ok=%v), want %s", got, ok, first)
+	}
+
+	second := first.Add(24 * time.Hour)
+	if err := store.SetCursor(ctx, CursorNormalize, second); err != nil {
+		t.Fatalf("SetCursor(上書き): %v", err)
+	}
+	got, _, err = store.GetCursor(ctx, CursorNormalize)
+	if err != nil {
+		t.Fatalf("GetCursor: %v", err)
+	}
+	if !got.Equal(second) {
+		t.Errorf("上書き後 = %s, want %s", got, second)
+	}
+}
