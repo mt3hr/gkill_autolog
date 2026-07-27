@@ -94,9 +94,17 @@ func newImportCmd() *cobra.Command {
 				return err
 			}
 
+			// 前回から開いたままの接続区間を持ち越す。
+			// これが無いと、開始イベントが窓の外に出た時点で区間を作れなくなる。
+			openStates, err := store.LoadOpenStates(ctx)
+			if err != nil {
+				return err
+			}
+
 			result, err := normalize.Run(events, normalize.Options{
 				Cutoff:     cutoff,
 				DenyList:   denyList,
+				OpenStates: openStates,
 				UsageTitle: cfg.UsageTitle,
 			})
 			if err != nil {
@@ -145,6 +153,13 @@ func newImportCmd() *cobra.Command {
 			if dryRun {
 				fmt.Fprintln(out, "\n(dry-run のため実際には書き込んでいない。カーソルも進めない)")
 				return nil
+			}
+
+			// まだ閉じていない接続区間を次回へ渡す。
+			// カーソルの更新より先に保存する。ここで落ちても、次回は
+			// 同じ範囲を読み直すだけで区間を失わない。
+			if err := store.SaveOpenStates(ctx, result.OpenStates); err != nil {
+				return err
 			}
 
 			cursor := pullBackCursor(result.SafeCursor, result.Proposals, stats.FailedProposalIDs)
