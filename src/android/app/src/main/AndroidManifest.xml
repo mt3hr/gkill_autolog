@@ -111,6 +111,11 @@
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <!--
+                  アプリを更新すると常駐サービスが止まったままになる。
+                  更新完了時に自分だけへ届くこれを受けて開始し直す。
+                -->
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
             </intent-filter>
         </receiver>
 

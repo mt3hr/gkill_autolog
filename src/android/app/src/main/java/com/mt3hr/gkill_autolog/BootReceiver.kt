@@ -5,14 +5,21 @@ import android.content.Context
 import android.content.Intent
 
 /**
- * 再起動後に収集を再開する。
+ * 端末の再起動後とアプリの更新後に収集を再開する。
+ *
+ * 更新を拾うのは、そうしないと更新のたびに収集が止まったままになるため。
+ * Android はアプリを入れ替えるとそのプロセスを停止するが、
+ * 常駐サービスは自動では戻らない。気付かないまま記録が途切れるので、
+ * 更新完了時に届く MY_PACKAGE_REPLACED でも開始する。
  *
  * 書き出し先の許可が無くても収集は始める。
  * 生ログは端末内に溜まり、許可されたあとの書き出しでまとめて渡される。
  */
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        if (intent.action != Intent.ACTION_BOOT_COMPLETED) return
-        AutologService.start(context)
+        when (intent.action) {
+            Intent.ACTION_BOOT_COMPLETED,
+            Intent.ACTION_MY_PACKAGE_REPLACED -> AutologService.start(context)
+        }
     }
 }
