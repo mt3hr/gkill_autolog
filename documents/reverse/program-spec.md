@@ -41,7 +41,7 @@ gkill へ入れるのは同期スクリプトの役目です。
 
 ## internal/rawlog — 生ログ
 
-追記専用の SQLite。単一テーブルです。
+SQLite。生ログ本体は追記専用です。
 
 ```sql
 CREATE TABLE raw_event (
@@ -55,6 +55,28 @@ CREATE TABLE raw_event (
   payload        TEXT NOT NULL    -- JSON。加工前の値
 );
 CREATE UNIQUE INDEX idx_raw_event_id ON raw_event(device, event_id);
+```
+
+処理の途中状態を持つテーブルが2つあります。どちらも生ログではないので上書きします。
+
+```sql
+-- どこまで処理したか
+CREATE TABLE process_cursor (
+  name       TEXT NOT NULL PRIMARY KEY,
+  value      TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+-- まだ切断を観測していない接続区間。次回へ持ち越す
+CREATE TABLE open_state_interval (
+  device     TEXT NOT NULL,
+  source     TEXT NOT NULL,
+  state_key  TEXT NOT NULL,   -- SSID や機器名
+  title      TEXT NOT NULL,
+  start_time TEXT NOT NULL,
+  event_ids  TEXT NOT NULL,   -- JSON 配列
+  PRIMARY KEY (device, source, state_key)
+);
 ```
 
 ### 時刻は必ずローカルへ揃えてから保存する
@@ -111,8 +133,22 @@ Chrome 拡張や Android は UTC (末尾 Z) で送ってくることがあるの
 
 ### 継続中のセッションは持ち越す
 
-上限時刻の時点でまだ終わっていないセッションは提案にしません。
-処理カーソルもその開始時刻より先へは進めません。次回まとめて処理します。
+上限時刻の時点でまだ終わっていないセッションは提案にしません。次回まとめて処理します。
+
+持ち越し方は2通りあり、対象によって使い分けます。
+
+**ウィンドウ操作と端末利用**は、処理カーソルをその開始時刻まで引き戻します。
+開いているのは常に「いま操作中の1件」なので、引き戻す幅は高々直近の数分です。
+
+**接続状態（Wi-Fi・Bluetooth・充電）**は、カーソルを引き戻さず、
+開いている区間そのものを `raw.db` の `open_state_interval` へ保存して次回へ渡します。
+こちらを引き戻し方式にできないのは、**切断しない機器があると永久に止まるから**です。
+スマートウォッチのように常時つないだままの機器があると区間が閉じることはなく、
+カーソルはその接続時刻に固定され続けます。処理する生ログは日ごとに増え、
+いずれ現実的な時間で終わらなくなります。
+
+持ち越した区間は次回の区間組み立ての起点として使うので、
+**開始イベントが処理範囲の外に出ていても正しく閉じられます**。
 
 ### 提案の ID は決定的
 
@@ -217,6 +253,41 @@ Android 以外では何もしません。
 
 常駐サービスと WorkManager の両方から呼ばれるため、プロセス内で排他します。
 これが無いと、同じ内容の JSONL が二重に書き出されます。
+
+### 外から書き出しをさせられる
+
+`ExportReceiver` を明示的に叩くと、その場で書き出します。
+`autolog.sh` が取り込みの直前に使います。これが無いと、
+アプリ内に溜まっている直近の記録が共有ディレクトリに出ないまま取り込みが走ります。
+
+```sh
+am broadcast --user 0 -f 0x20 -n com.mt3hr.gkill_autolog/.ExportReceiver
+```
+
+`am broadcast` は順序付きブロードキャストを送って完了まで待ち、受け口は
+`goAsync()` で書き出しが終わるまで完了扱いにしないので、**呼び出し側は完了を待てます**。
+結果コードに件数、結果データに人が読める文字列を載せるので、成否を判別できます。
+
+`intent-filter` は付けません。呼ぶ側にコンポーネント名を明示させることで、
+他のアプリのブロードキャストにたまたま反応することがなくなります。
+
+### 更新後も収集を続ける
+
+Android はアプリを入れ替えるとプロセスを停止しますが、常駐サービスは自動では戻りません。
+`BootReceiver` は端末起動時の `BOOT_COMPLETED` に加えて、
+更新完了時に自分自身へだけ届く `MY_PACKAGE_REPLACED` でも収集を開始します。
+
+これが無いと、更新のたびに収集が黙って止まり、
+設定画面で「収集を開始」を押すまで記録が途切れます。
+
+### 直前の SSID は永続化する
+
+Wi-Fi の切断時は SSID を取得できないため、直前に接続していた SSID を覚えておいて
+切断イベントを作ります。この値はメモリだけで持たず永続化します。
+
+プロセスが死ぬと失われ、復帰後は切断イベントを作れなくなります。
+すると接続区間が閉じないまま残り、
+[持ち越し開区間](glossary.md#持ち越し開区間-open_state_interval) に溜まり続けます。
 
 ### 位置情報 (GPX)
 
