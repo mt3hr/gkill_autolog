@@ -1,6 +1,7 @@
 package normalize
 
 import (
+	"slices"
 	"time"
 
 	"github.com/mt3hr/gkill_autolog/src/autolog/internal/rawlog"
@@ -33,8 +34,8 @@ type stateInterval struct {
 //   - Bluetooth: 1 分以内の再接続（機器名単位、複数機器は別々の TimeIs）
 //   - 充電: 30 秒以内の再開（残量・方式は記録しない）
 //
-// 返す2つ目の値は継続中区間のうち最も早い開始時刻。
-func connectionStates(device rawlog.Device, events []*rawlog.Event) ([]Proposal, time.Time, error) {
+// 返す2つ目の値は cutoff 時点でまだ閉じていない区間。呼び出し側が次回へ持ち越す。
+func connectionStates(device rawlog.Device, events []*rawlog.Event, carried []rawlog.OpenStateInterval) ([]Proposal, []rawlog.OpenStateInterval, error) {
 	groups := []struct {
 		eventType   rawlog.EventType
 		source      string
@@ -99,16 +100,35 @@ func connectionStates(device rawlog.Device, events []*rawlog.Event) ([]Proposal,
 	}
 
 	var (
-		proposals    []Proposal
-		earliestOpen time.Time
+		proposals []Proposal
+		stillOpen []rawlog.OpenStateInterval
 	)
+
+	// 前回から持ち越した開区間を種別・キーで引けるようにする。
+	carriedBySource := map[string]map[string]stateInterval{}
+	for _, open := range carried {
+		if open.Device != device {
+			continue
+		}
+		if _, ok := carriedBySource[open.Source]; !ok {
+			carriedBySource[open.Source] = map[string]stateInterval{}
+		}
+		carriedBySource[open.Source][open.Key] = stateInterval{
+			key:      open.Key,
+			title:    open.Title,
+			start:    open.Start,
+			end:      open.Start,
+			eventIDs: open.EventIDs,
+			open:     true,
+		}
+	}
 
 	for _, group := range groups {
 		var changes []stateChange
 		for _, event := range filterType(events, group.eventType) {
 			change, err := group.decode(event)
 			if err != nil {
-				return nil, time.Time{}, err
+				return nil, nil, err
 			}
 			if change.key == "" {
 				continue
@@ -116,13 +136,21 @@ func connectionStates(device rawlog.Device, events []*rawlog.Event) ([]Proposal,
 			changes = append(changes, change)
 		}
 
-		intervals := buildStateIntervals(changes, group.mergeWindow)
+		intervals := buildStateIntervals(changes, group.mergeWindow, carriedBySource[group.source])
 		for _, interval := range intervals {
 			if interval.open {
-				// 切断を観測していない＝継続中。次回バッチに回す。
-				if earliestOpen.IsZero() || interval.start.Before(earliestOpen) {
-					earliestOpen = interval.start
-				}
+				// 切断を観測していない＝継続中。
+				// カーソルは引き戻さず、区間そのものを次回へ持ち越す。
+				// 引き戻していると、常時つないだままの機器があるだけで
+				// 処理位置が永久に進まなくなる。
+				stillOpen = append(stillOpen, rawlog.OpenStateInterval{
+					Device:   device,
+					Source:   group.source,
+					Key:      interval.key,
+					Title:    interval.title,
+					Start:    interval.start,
+					EventIDs: interval.eventIDs,
+				})
 				continue
 			}
 			proposals = append(proposals, Proposal{
@@ -138,13 +166,13 @@ func connectionStates(device rawlog.Device, events []*rawlog.Event) ([]Proposal,
 		}
 	}
 
-	return proposals, earliestOpen, nil
+	return proposals, stillOpen, nil
 }
 
 // buildStateIntervals は接続・切断の並びを区間へまとめ、短い切断を結合する。
 //
 // 同時に複数の対象へつながっている場合は、それぞれ別の区間として扱う。
-func buildStateIntervals(changes []stateChange, mergeWindow time.Duration) []stateInterval {
+func buildStateIntervals(changes []stateChange, mergeWindow time.Duration, carried map[string]stateInterval) []stateInterval {
 	// キーごとに独立して処理する。
 	byKey := map[string][]stateChange{}
 	var order []string
@@ -155,12 +183,31 @@ func buildStateIntervals(changes []stateChange, mergeWindow time.Duration) []sta
 		byKey[change.key] = append(byKey[change.key], change)
 	}
 
+	// 持ち越した開区間のキーも処理対象にする。
+	// 今回そのキーのイベントが1件も無くても、開いたままとして次回へ渡す必要がある。
+	// map の反復順は不定なので、並べてから足して結果を安定させる。
+	carriedOnly := make([]string, 0, len(carried))
+	for key := range carried {
+		if _, seen := byKey[key]; !seen {
+			carriedOnly = append(carriedOnly, key)
+		}
+	}
+	slices.Sort(carriedOnly)
+	order = append(order, carriedOnly...)
+
 	var intervals []stateInterval
 	for _, key := range order {
 		var (
 			current *stateInterval
 			result  []stateInterval
 		)
+		// 前回から開いたままの区間があれば、それを続きとして扱う。
+		// こうすると開始イベントが今回の窓の外にあっても正しく閉じられる。
+		if carriedInterval, ok := carried[key]; ok {
+			interval := carriedInterval
+			interval.eventIDs = slices.Clone(carriedInterval.eventIDs)
+			current = &interval
+		}
 
 		for _, change := range byKey[key] {
 			if change.connected {

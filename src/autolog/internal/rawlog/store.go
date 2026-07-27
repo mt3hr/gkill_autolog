@@ -3,6 +3,7 @@ package rawlog
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -45,6 +46,16 @@ CREATE TABLE IF NOT EXISTS process_cursor (
   name       TEXT NOT NULL PRIMARY KEY,
   value      TEXT NOT NULL,
   updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS open_state_interval (
+  device     TEXT NOT NULL,
+  source     TEXT NOT NULL,
+  state_key  TEXT NOT NULL,
+  title      TEXT NOT NULL,
+  start_time TEXT NOT NULL,
+  event_ids  TEXT NOT NULL,
+  PRIMARY KEY (device, source, state_key)
 );
 `
 
@@ -338,4 +349,80 @@ func (s *Store) SetCursor(ctx context.Context, name string, t time.Time) error {
 		return fmt.Errorf("failed to set cursor %s: %w", name, err)
 	}
 	return nil
+}
+
+// OpenStateInterval は cutoff の時点でまだ切断を観測していない接続区間。
+//
+// 常時つないだままの機器 (スマートウォッチや自宅の Wi-Fi) があると、
+// その区間は何日も閉じない。開始時刻までカーソルを引き戻していると
+// 永久に処理位置が進まなくなるので、開いた区間だけをここへ保存して
+// 次回へ持ち越し、カーソルは cutoff まで進める。
+type OpenStateInterval struct {
+	Device   Device
+	Source   string
+	Key      string
+	Title    string
+	Start    time.Time
+	EventIDs []string
+}
+
+// LoadOpenStates は持ち越した開区間を読む。
+func (s *Store) LoadOpenStates(ctx context.Context) ([]OpenStateInterval, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT device, source, state_key, title, start_time, event_ids
+		 FROM open_state_interval ORDER BY device, source, state_key`)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load open state intervals: %w", err)
+	}
+	defer rows.Close()
+
+	var opens []OpenStateInterval
+	for rows.Next() {
+		var (
+			open     OpenStateInterval
+			start    string
+			eventIDs string
+		)
+		if err := rows.Scan(&open.Device, &open.Source, &open.Key, &open.Title, &start, &eventIDs); err != nil {
+			return nil, fmt.Errorf("failed to scan open state interval: %w", err)
+		}
+		open.Start, err = ParseTime(start)
+		if err != nil {
+			return nil, fmt.Errorf("open state interval %s/%s: %w", open.Source, open.Key, err)
+		}
+		if err := json.Unmarshal([]byte(eventIDs), &open.EventIDs); err != nil {
+			return nil, fmt.Errorf("open state interval %s/%s event_ids: %w", open.Source, open.Key, err)
+		}
+		opens = append(opens, open)
+	}
+	return opens, rows.Err()
+}
+
+// SaveOpenStates は開区間を保存する。以前の内容は入れ替える。
+//
+// 閉じた区間は opens に含まれないので、まとめて消してから入れ直す。
+func (s *Store) SaveOpenStates(ctx context.Context, opens []OpenStateInterval) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to begin tx for open state intervals: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.ExecContext(ctx, `DELETE FROM open_state_interval`); err != nil {
+		return fmt.Errorf("failed to clear open state intervals: %w", err)
+	}
+	for _, open := range opens {
+		eventIDs, err := json.Marshal(open.EventIDs)
+		if err != nil {
+			return fmt.Errorf("failed to encode event_ids: %w", err)
+		}
+		_, err = tx.ExecContext(ctx,
+			`INSERT INTO open_state_interval (device, source, state_key, title, start_time, event_ids)
+			 VALUES (?, ?, ?, ?, ?, ?)`,
+			open.Device, open.Source, open.Key, open.Title, storageTime(open.Start), string(eventIDs))
+		if err != nil {
+			return fmt.Errorf("failed to save open state interval %s/%s: %w", open.Source, open.Key, err)
+		}
+	}
+	return tx.Commit()
 }

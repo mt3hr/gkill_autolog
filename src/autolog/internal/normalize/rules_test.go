@@ -465,7 +465,10 @@ func TestChargeMergingAndTitle(t *testing.T) {
 }
 
 func TestConnectionStillOpenIsDeferred(t *testing.T) {
-	// 切断を観測していない接続は継続中。処理せず次回へ持ち越す。
+	// 切断を観測していない接続は継続中。提案にはせず次回へ持ち越す。
+	//
+	// カーソルは引き戻さない。引き戻していると、常時つないだままの機器
+	// (スマートウォッチや自宅の Wi-Fi) があるだけで処理位置が永久に進まなくなる。
 	result := runNormalize(t, []*rawlog.Event{
 		wifiEvent(t, "w1", 10*min, "TestWifi", true),
 	}, 60*min)
@@ -473,8 +476,46 @@ func TestConnectionStillOpenIsDeferred(t *testing.T) {
 	if got := len(proposalsBySource(result, SourceWifi)); got != 0 {
 		t.Errorf("件数 = %d, want 0", got)
 	}
-	if cursor := result.SafeCursor.Sub(base()); cursor != 10*min {
-		t.Errorf("SafeCursor = %v, want %v", cursor, 10*min)
+	if cursor := result.SafeCursor.Sub(base()); cursor != 60*min {
+		t.Errorf("SafeCursor = %v, want %v (cutoff まで進む)", cursor, 60*min)
+	}
+
+	if len(result.OpenStates) != 1 {
+		t.Fatalf("持ち越し件数 = %d, want 1 (%+v)", len(result.OpenStates), result.OpenStates)
+	}
+	open := result.OpenStates[0]
+	if open.Source != SourceWifi || open.Key != "TestWifi" {
+		t.Errorf("持ち越し = %s/%s, want %s/TestWifi", open.Source, open.Key, SourceWifi)
+	}
+	if got := open.Start.Sub(base()); got != 10*min {
+		t.Errorf("持ち越しの開始 = %v, want %v", got, 10*min)
+	}
+}
+
+func TestCarriedOpenConnectionClosesOnNextRun(t *testing.T) {
+	// 前回持ち越した開区間は、開始イベントが今回の窓の外にあっても閉じられる。
+	// これができないと、カーソルを進めた瞬間に区間を作れなくなる。
+	first := runNormalize(t, []*rawlog.Event{
+		wifiEvent(t, "w1", 10*min, "TestWifi", true),
+	}, 60*min)
+
+	// 2回目は切断イベントだけ。接続イベントはもう窓に入らない。
+	result := runNormalizeWith(t, []*rawlog.Event{
+		wifiEvent(t, "w2", 90*min, "TestWifi", false),
+	}, Options{Cutoff: base().Add(120 * min), OpenStates: first.OpenStates})
+
+	wifi := proposalsBySource(result, SourceWifi)
+	if len(wifi) != 1 {
+		t.Fatalf("件数 = %d, want 1 (%+v)", len(wifi), wifi)
+	}
+	if got := wifi[0].StartTime.Sub(base()); got != 10*min {
+		t.Errorf("開始 = %v, want %v (持ち越した開始時刻を使う)", got, 10*min)
+	}
+	if got := wifi[0].EndTime.Sub(base()); got != 90*min {
+		t.Errorf("終了 = %v, want %v", got, 90*min)
+	}
+	if len(result.OpenStates) != 0 {
+		t.Errorf("持ち越し = %d, want 0 (閉じたので残らない)", len(result.OpenStates))
 	}
 }
 

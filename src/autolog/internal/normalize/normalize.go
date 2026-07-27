@@ -116,6 +116,9 @@ type Options struct {
 	Cutoff time.Time
 	// DenyList は URLog にしない URL のパターン。nil なら除外しない。
 	DenyList *DenyList
+	// OpenStates は前回までに開いたまま持ち越された接続区間。
+	// これを渡すと、開始イベントが今回の窓の外にあっても区間を閉じられる。
+	OpenStates []rawlog.OpenStateInterval
 	// UsageTitle は端末利用 TimeIs のタイトル。空なら DefaultUsageTitle。
 	//
 	// 端末ごとに呼び分けたい語（「Windows利用」など）は環境によって違うので、
@@ -138,6 +141,9 @@ type Result struct {
 	// URLCandidates は Claude の判定を待つ URLog 候補。
 	// 対応する Proposal は Proposals にも入っており、判定で捨てられたものだけ書き込まない。
 	URLCandidates []URLCandidate
+	// OpenStates は Cutoff 時点でまだ閉じていない接続区間。
+	// 呼び出し側が保存し、次回の Options.OpenStates として渡す。
+	OpenStates []rawlog.OpenStateInterval
 	// SafeCursor は次回の開始位置。
 	// 継続中のセッションの開始時刻より先へは進めないため、Cutoff より前になることがある。
 	SafeCursor time.Time
@@ -199,12 +205,15 @@ func Run(events []*rawlog.Event, opts Options) (*Result, error) {
 		}
 		result.Proposals = append(result.Proposals, appProposals...)
 
-		stateProposals, stateCursor, err := connectionStates(device, deviceEvents)
+		// 接続区間はカーソルを引き戻さない。常時つないだままの機器
+		// (スマートウォッチや自宅の Wi-Fi) があると永久に進まなくなるため、
+		// 開いている区間は Result で持ち越して次回に閉じる。
+		stateProposals, stateOpens, err := connectionStates(device, deviceEvents, opts.OpenStates)
 		if err != nil {
 			return nil, err
 		}
 		result.Proposals = append(result.Proposals, stateProposals...)
-		result.limitCursor(stateCursor)
+		result.OpenStates = append(result.OpenStates, stateOpens...)
 
 		notificationProposals, err := notifications(device, deviceEvents)
 		if err != nil {

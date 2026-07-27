@@ -330,3 +330,59 @@ func TestCursorRoundTrip(t *testing.T) {
 		t.Errorf("上書き後 = %s, want %s", got, second)
 	}
 }
+
+func TestOpenStateIntervalRoundTrip(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+
+	if opens, err := store.LoadOpenStates(ctx); err != nil {
+		t.Fatalf("LoadOpenStates: %v", err)
+	} else if len(opens) != 0 {
+		t.Errorf("初期状態の件数 = %d, want 0", len(opens))
+	}
+
+	watch := OpenStateInterval{
+		Device:   "Phone",
+		Source:   "bluetooth",
+		Key:      "Watch",
+		Title:    "Bluetooth Watch",
+		Start:    baseTime(),
+		EventIDs: []string{"b1", "b2"},
+	}
+	wifi := OpenStateInterval{
+		Device:   "Phone",
+		Source:   "wifi",
+		Key:      "TestWifi",
+		Title:    "Wi-Fi TestWifi",
+		Start:    baseTime().Add(time.Hour),
+		EventIDs: []string{"w1"},
+	}
+	if err := store.SaveOpenStates(ctx, []OpenStateInterval{watch, wifi}); err != nil {
+		t.Fatalf("SaveOpenStates: %v", err)
+	}
+
+	opens, err := store.LoadOpenStates(ctx)
+	if err != nil {
+		t.Fatalf("LoadOpenStates: %v", err)
+	}
+	if len(opens) != 2 {
+		t.Fatalf("件数 = %d, want 2 (%+v)", len(opens), opens)
+	}
+	// device, source, state_key 順に返る。
+	if got := opens[0]; got.Key != watch.Key || !got.Start.Equal(watch.Start) ||
+		len(got.EventIDs) != 2 || got.EventIDs[1] != "b2" || got.Title != watch.Title {
+		t.Errorf("1件目 = %+v, want %+v", got, watch)
+	}
+
+	// 閉じた区間は渡さない。保存は入れ替えなので消える。
+	if err := store.SaveOpenStates(ctx, []OpenStateInterval{wifi}); err != nil {
+		t.Fatalf("SaveOpenStates(2回目): %v", err)
+	}
+	opens, err = store.LoadOpenStates(ctx)
+	if err != nil {
+		t.Fatalf("LoadOpenStates(2回目): %v", err)
+	}
+	if len(opens) != 1 || opens[0].Key != wifi.Key {
+		t.Fatalf("入れ替え後 = %+v, want TestWifi のみ", opens)
+	}
+}
