@@ -16,14 +16,26 @@ param(
     [switch]$DryRun,
     # 処理する上限時刻 (RFC3339)。既定は直近の午前4時。取りこぼしの追い込みに使う。
     [string]$Cutoff,
-    # 上限を「いま」にする。午前4時を待たずに手元で試すとき用。
-    # 既定の上限は直近の午前4時なので、4時より前に手で実行すると
-    # その日に集めた分がまるごと対象外になり0件になる。
+    # 上限を「直近まで」にする。午前4時を待たずに回すとき用。
+    #
+    # 既定の上限は直近の午前4時。もともと4時の定期実行を前提にした値なので、
+    # 任意の時刻に回すとその日に集めた分がまるごと対象外になる。
+    #
+    # ただし「いま」ちょうどまでにはしない。接続系 (Wi-Fi・Bluetooth・充電) は
+    # 短い切断を結合するが、結合は「次の接続」を見て初めて判定される。
+    # 切断直後に処理すると本来つながる区間が2つに割れて確定し、
+    # 書き込むと台帳に載るのであとから結合し直されない。
+    # そのため $CutoffLagMinutes だけ手前を上限にする。
     [switch]$UntilNow
 )
 
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot '_gkill_api.ps1')
+
+# -UntilNow のときに「いま」から何分手前を上限にするか。
+# 接続系のマージ窓 (最長1分) を確実に超える値にする。詳細は param の説明。
+# termux-tasker/autolog.sh の cutoff も同じ考え方で 2 分にしてある。
+$CutoffLagMinutes = 2
 
 # param の既定値では解決しない。Windows PowerShell 5.1 は -File で起動されたとき
 # param ブロック内の $PSScriptRoot が空になるため（タスクスケジューラがこの起動方法）。
@@ -93,7 +105,13 @@ Write-Log "=== 取り込み開始 (dry-run=$DryRun) ==="
 
 $importArgs = @('import')
 if ($DryRun) { $importArgs += '--dry-run' }
-if ($UntilNow) { $importArgs += '--until-now' }
+if ($UntilNow) {
+    # 最長のマージ窓 (Bluetooth とウィンドウの1分) を確実に超える値。
+    # 直近 $CutoffLagMinutes 分は次回にまわるだけで失われない。
+    $cutoffAt = (Get-Date).AddMinutes(-$CutoffLagMinutes).ToString('yyyy-MM-ddTHH:mm:sszzz')
+    Write-Log "上限: $cutoffAt"
+    $importArgs += @('--cutoff', $cutoffAt)
+}
 if ($Cutoff) { $importArgs += @('--cutoff', $Cutoff) }
 
 $output = $null
