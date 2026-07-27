@@ -28,8 +28,24 @@ class SystemEventCollector(
 ) {
     private var registered = false
 
-    /** 直前に接続していた SSID。切断イベントを作るために覚えておく。 */
-    private var lastSsid: String? = null
+    /**
+     * 直前に接続していた SSID。切断イベントを作るために覚えておく。
+     *
+     * プロセスが死んでも失わないよう永続化する。メモリだけで持つと、
+     * 再起動のたびに切断イベントを作れなくなり、接続区間が
+     * 閉じないまま残る。normalize 側はそれを「継続中」とみなすので、
+     * 取り込みのカーソルがそこで止まってしまう。
+     */
+    private var lastSsid: String?
+        get() = prefs.getString(KEY_LAST_SSID, null)
+        set(value) {
+            prefs.edit().apply {
+                if (value == null) remove(KEY_LAST_SSID) else putString(KEY_LAST_SSID, value)
+            }.apply()
+        }
+
+    private val prefs
+        get() = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
     private val receiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -166,5 +182,10 @@ class SystemEventCollector(
         val batteryManager = context.getSystemService(Context.BATTERY_SERVICE) as? BatteryManager
             ?: return false
         return batteryManager.isCharging
+    }
+
+    companion object {
+        private const val PREFS_NAME = "system_event_collector"
+        private const val KEY_LAST_SSID = "last_ssid"
     }
 }
