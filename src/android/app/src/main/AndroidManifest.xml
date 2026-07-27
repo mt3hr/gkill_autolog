@@ -113,5 +113,13 @@
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
             </intent-filter>
         </receiver>
+
+        <!--
+          Termux の autolog.sh から書き出しをさせるための受け口。
+          intent-filter は付けない。呼ぶ側にコンポーネント名を明示させる。
+        -->
+        <receiver
+            android:name=".ExportReceiver"
+            android:exported="true" />
     </application>
 </manifest>
