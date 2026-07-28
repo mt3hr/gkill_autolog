@@ -297,11 +297,19 @@ Broadcast completed: result=12, data="12 件を書き出した"
 
 | 症状 | 原因 |
 |---|---|
-| `Could not connect to socket` | `termux-am` のソケットが無い。他の `am` へ自動で切り替わる |
-| `Broadcast sent without waiting for result` | PATH 上の `am` は結果を待たない。送信自体は成立している |
-| `SecurityException: ... user -2 ... INTERACT_ACROSS_USERS` | `--user 0` の指定漏れ。スクリプトは指定済み |
+| `Could not connect to socket` | `termux-am` のソケットが無い。`/system/bin/am` へ落とす |
+| `Broadcast sent without waiting for result` | 結果を待たずに戻っている。送信自体は成立している |
+| `SecurityException: ... user -2 ... INTERACT_ACROSS_USERS` | `--user 0` の指定漏れ |
 | `result=-1` | 全ファイルアクセスの許可が外れている |
 | `result=0` | 溜まっている記録が無い。収集サービスが止まっていないか確認する |
+
+`termux-am` のソケットは `termux-am-socket` パッケージではなく **Termux アプリ本体**が作ります。
+パスは `/data/data/com.termux/files/apps/com.termux/termux-am/am.sock` で、`$PREFIX/var/run/` ではありません。
+
+**F-Droid の Termux 0.118.3 はこのサーバを持ちません。** ディレクトリごと存在せず、
+`TERMUX_APP__AM_SOCKET_SERVER_ENABLED` も export されないので、`termux.properties` で有効にすることもできません。
+Android 17 の端末で確認しています。この場合は `/system/bin/am` を使ってください。
+`--user 0` さえ付ければ順序付きブロードキャストも結果待ちも問題なく動きます。
 
 ### `Client sent an HTTP request to an HTTPS server.`
 
