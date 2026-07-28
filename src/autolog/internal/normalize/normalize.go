@@ -41,6 +41,16 @@ const (
 	SourceNotification = "autolog_notification"
 )
 
+// 再生元サービスを表すタグ。収集元タグ (SourceMedia) に足して付ける。
+//
+// SourceMedia だけでは動画と音楽を見分けられない。Dnote は
+// TagEqualPredicate で集計するため、サービスごとに分けたいなら
+// タグとして出しておく必要がある。
+const (
+	TagYouTube      = "autolog_youtube"
+	TagYouTubeMusic = "autolog_youtube_music"
+)
+
 // 要件で決まっている閾値と結合幅。
 const (
 	// IdleTimeout はこれだけ入力が無ければウィンドウのセッションを終える（要件 §6.3）。
@@ -80,6 +90,11 @@ type Proposal struct {
 	Device rawlog.Device `json:"device"`
 	// Source は収集元。書き込み時にタグとして付ける。
 	Source string `json:"source"`
+	// Tags は Source に足して付ける追加のタグ。
+	//
+	// ID の計算には入れない。タグを増やしても既に書いた分と同じ ID になり、
+	// 台帳の重複判定がそのまま効く。
+	Tags []string `json:"tags,omitempty"`
 	// SourceEventIDs は元になった生ログのイベントID。
 	SourceEventIDs []string `json:"source_event_ids"`
 

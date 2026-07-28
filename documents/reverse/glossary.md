@@ -65,6 +65,24 @@ gkill 本体の用語は [gkill の用語集](https://github.com/mt3hr/gkill/blo
 | `autolog_charge` | 充電 |
 | `autolog_notification` | 通知 |
 
+### 再生元サービス
+
+再生の Kyou には、収集元タグ `autolog_media` に足してサービスのタグが付きます。
+`autolog_media` だけでは動画と音楽を見分けられず、Dnote はタグの一致で
+集計するため、分けて数えられるようにしてあります。URLog にも TimeIs にも付きます。
+
+| タグ | 何を再生したか |
+| --- | --- |
+| `autolog_youtube` | YouTube（動画） |
+| `autolog_youtube_music` | YouTube Music（音楽） |
+
+知らないサービスには何も付けません。当てずっぽうのタグを付けると集計が静かにずれます。
+
+このタグは Kyou の ID の計算には入りません。タグを増やしても既に書いた分と
+同じ ID になるため、台帳の重複判定はそのまま効きます。
+ただし**既に書き込んだ Kyou に後からタグは付きません。**
+台帳が「書き込み済み」として飛ばすためです。
+
 ### 端末名 (device)
 
 どの端末で観測したかを表す名前。gkill の端末名と揃えます。
