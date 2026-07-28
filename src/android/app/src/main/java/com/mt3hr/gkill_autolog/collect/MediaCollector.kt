@@ -15,11 +15,14 @@ import org.json.JSONObject
  *
  * 記録するのは実際に再生された秒数だけで、一時停止している間は数えない。
  *
- * **URL または動画IDを確定できない場合は何も記録しない。**
- * 検索URLや推測したURLを作ってはならず、Kmemo への代替記録も行わない（要件 §8.2）。
- * MediaSession はタイトルとアーティストしか返さないため、
- * 多くの場合ここでは URL を確定できない。その場合は生ログにも残さず、
- * Chrome 履歴からの取得（ChromeHistoryCollector）に委ねる。
+ * **検索URLや推測したURLは作らない**（要件 §8.2）。
+ * ただしメタデータの中に動画IDそのものが入っていることがあるので、
+ * [extractVideoId] で確認できたときだけ正規URLを組み立てる。
+ * 確認できた動画IDから正規URLを作るのは推測ではない。
+ *
+ * 動画IDを確認できなかった再生も生ログには残す。
+ * タイトルとアーティストは MediaSession から観測できた事実なので、
+ * X1 Yoga 側の normalize が URL 無しの再生として TimeIs にする（要件 §8.2）。
  *
  * 30秒未満を落とす判定は X1 Yoga 側の normalize が行う。
  */
@@ -40,6 +43,8 @@ class MediaCollector(
         val title: String,
         val artist: String,
         val service: String,
+        /** 確認できた動画ID。確認できなければ空。 */
+        var videoId: String,
         val startedAt: Long,
         var playedMillis: Long,
         var lastTickAt: Long,
@@ -97,11 +102,18 @@ class MediaCollector(
                 title = title,
                 artist = artist,
                 service = service,
+                videoId = "",
                 startedAt = now,
                 playedMillis = 0,
                 lastTickAt = now,
                 wasPlaying = isPlaying,
             )
+        }
+
+        // 動画IDは再生開始直後のメタデータにはまだ入っていないことがある。
+        // 一度確認できたらそのまま持ち、以降は上書きしない。
+        if (state.videoId.isEmpty()) {
+            state.videoId = extractVideoId(metadata).orEmpty()
         }
 
         // 再生中だった区間だけを積み上げる。一時停止中は数えない。
@@ -119,13 +131,18 @@ class MediaCollector(
         }
         if (state.playedMillis <= 0 || state.title.isBlank()) return
 
-        // URL を確定できないため書き込み対象にはならない。
-        // それでも生ログには残し、後から突き合わせられるようにする。
         val payload = JSONObject()
             .put("service", state.service)
             .put("title", state.title)
             .put("artist", state.artist)
             .put("played_seconds", state.playedMillis / 1000.0)
+
+        // 動画IDを確認できたときだけ URL を載せる。
+        // 載っていれば normalize が URLog に、載っていなければ TimeIs にする。
+        if (state.videoId.isNotEmpty()) {
+            payload.put("video_id", state.videoId)
+            payload.put("url", watchUrl(state.service, state.videoId))
+        }
 
         store.put(Event.interval(EventType.MEDIA_PLAY, state.startedAt, now, payload))
     }
@@ -136,8 +153,55 @@ class MediaCollector(
         else -> null
     }
 
+    /** 確認できた動画IDから、そのサービスでの正規URLを組み立てる。 */
+    private fun watchUrl(service: String, videoId: String): String {
+        val host = if (service == "youtube_music") "music.youtube.com" else "www.youtube.com"
+        return "https://$host/watch?v=$videoId"
+    }
+
     companion object {
         private const val PACKAGE_YOUTUBE = "com.google.android.youtube"
         private const val PACKAGE_YOUTUBE_MUSIC = "com.google.android.apps.youtube.music"
+
+        /**
+         * サムネイルURIに埋まっている動画ID。
+         *
+         * `https://i.ytimg.com/vi/<動画ID>/hqdefault.jpg` と
+         * `https://i.ytimg.com/vi_webp/<動画ID>/hqdefault.webp` の両方を受ける。
+         * 動画IDは11文字の URL-safe base64。
+         */
+        private val THUMBNAIL_VIDEO_ID = Regex("/vi(?:_[a-z]+)?/([A-Za-z0-9_-]{11})/")
+
+        /**
+         * メタデータから動画IDを取り出す。確認できなければ null。
+         *
+         * MediaSession は URL を持たないが、サムネイルURIのパスには動画IDが入っている。
+         * `i.ytimg.com/vi/<動画ID>/` の `<動画ID>` は動画IDそのものなので、
+         * ここから正規URLを組み立てるのは推測ではない。
+         *
+         * **`METADATA_KEY_MEDIA_ID` は使わない。** 書式検査を通る11文字であっても
+         * 動画IDとは限らず、プレイリスト内の項目IDなど別のものが入りうる。
+         * 取り違えると存在しない動画の URL を作り、gkill がそれを取得しに行って
+         * エラーページのタイトルを保存してしまう。
+         * 誤った URL を残すくらいなら、URL 無しの TimeIs にしたほうがよい。
+         *
+         * YouTube Music のアルバムアートは googleusercontent.com のことが多く、
+         * その場合は動画IDを含まないので取り出せない。それも TimeIs になる。
+         */
+        fun extractVideoId(metadata: android.media.MediaMetadata?): String? {
+            if (metadata == null) return null
+
+            val artUris = listOf(
+                android.media.MediaMetadata.METADATA_KEY_DISPLAY_ICON_URI,
+                android.media.MediaMetadata.METADATA_KEY_ART_URI,
+                android.media.MediaMetadata.METADATA_KEY_ALBUM_ART_URI,
+            )
+            for (key in artUris) {
+                val uri = metadata.getString(key) ?: continue
+                val matched = THUMBNAIL_VIDEO_ID.find(uri) ?: continue
+                return matched.groupValues[1]
+            }
+            return null
+        }
     }
 }

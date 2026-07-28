@@ -327,15 +327,111 @@ func TestMediaPlayMinimumPlayedSeconds(t *testing.T) {
 	}
 }
 
-func TestMediaPlayWithoutURLIsSkipped(t *testing.T) {
-	// URLを取得できない場合、検索URLや推測したURLは生成しない。
-	// Kmemoへの代替記録も行わない（要件 §8.2）。
+// mediaEventNoURL は URL を確定できなかった再生を作る。
+// Android の MediaSession はタイトルとアーティストしか返さないことが多い。
+func mediaEventNoURL(t *testing.T, id string, start, end time.Duration, played float64, title, artist string) *rawlog.Event {
+	t.Helper()
+	return androidEvent(t, id, rawlog.EventMediaPlay, start, durationPtr(end), rawlog.MediaPlayPayload{
+		Service: rawlog.ServiceYouTubeMusic, Title: title, Artist: artist, PlayedSeconds: played,
+	})
+}
+
+func TestMediaPlayWithoutURLBecomesTimeIs(t *testing.T) {
+	// URLを確定できない再生は TimeIs として記録する（要件 §8.2）。
+	// 検索URLや推測したURLは生成しないので URLog にはしない。
 	result := runNormalize(t, []*rawlog.Event{
-		mediaEvent(t, "m1", 0, 300, ""),
+		mediaEventNoURL(t, "m1", 0, 5*min, 300, "Bohemian Rhapsody", "Queen"),
 	}, 60*min)
 
-	if len(result.Proposals) != 0 {
-		t.Errorf("URLが無い再生から %d 件作られた: %+v", len(result.Proposals), result.Proposals)
+	plays := proposalsBySource(result, SourceMedia)
+	if len(plays) != 1 {
+		t.Fatalf("件数 = %d, want 1: %+v", len(plays), plays)
+	}
+	if plays[0].Kind != KindTimeIs {
+		t.Errorf("Kind = %q, want %q", plays[0].Kind, KindTimeIs)
+	}
+	if plays[0].URL != "" {
+		t.Errorf("URL が埋められた: %q", plays[0].URL)
+	}
+	// タイトルはタイトルとアーティストの併記。補完はしない。
+	if plays[0].Title != "Bohemian Rhapsody - Queen" {
+		t.Errorf("Title = %q", plays[0].Title)
+	}
+	// 区間は収集側が記録した壁時計の開始・終了をそのまま使う。
+	if plays[0].StartTime.Sub(base()) != 0 {
+		t.Errorf("StartTime = %v, want base", plays[0].StartTime)
+	}
+	if plays[0].EndTime.Sub(base()) != 5*min {
+		t.Errorf("EndTime = %v, want base+5m", plays[0].EndTime)
+	}
+}
+
+func TestMediaPlayWithoutURLUsesPlayedSecondsWhenEndTimeIsMissing(t *testing.T) {
+	// 終了時刻を持たない収集元でも、実再生秒数から区間を作って記録する。
+	result := runNormalize(t, []*rawlog.Event{
+		androidEvent(t, "m1", rawlog.EventMediaPlay, 0, nil, rawlog.MediaPlayPayload{
+			Service: rawlog.ServiceYouTube, Title: "動画タイトル", PlayedSeconds: 120,
+		}),
+	}, 60*min)
+
+	plays := proposalsBySource(result, SourceMedia)
+	if len(plays) != 1 {
+		t.Fatalf("件数 = %d, want 1", len(plays))
+	}
+	if plays[0].EndTime.Sub(base()) != 2*min {
+		t.Errorf("EndTime = %v, want base+2m", plays[0].EndTime)
+	}
+}
+
+func TestMediaPlayWithoutURLNeedsTitle(t *testing.T) {
+	// タイトルが無ければ何を再生したのか分からず、区間だけが残る。
+	// それは app_usage の TimeIs と変わらないので作らない。
+	result := runNormalize(t, []*rawlog.Event{
+		mediaEventNoURL(t, "m1", 0, 5*min, 300, "", ""),
+	}, 60*min)
+
+	if got := len(proposalsBySource(result, SourceMedia)); got != 0 {
+		t.Errorf("件数 = %d, want 0", got)
+	}
+}
+
+func TestMediaPlayWithoutURLObeysMinimumPlayedSeconds(t *testing.T) {
+	// 30秒未満を落とす条件は URLog と TimeIs で共通（要件 §8.1）。
+	tests := []struct {
+		name   string
+		played float64
+		want   int
+	}{
+		{name: "29秒は除外", played: 29, want: 0},
+		{name: "30秒ちょうどは記録", played: 30, want: 1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := runNormalize(t, []*rawlog.Event{
+				mediaEventNoURL(t, "m1", 0, 5*min, tt.played, "曲名", "アーティスト"),
+			}, 60*min)
+
+			if got := len(proposalsBySource(result, SourceMedia)); got != tt.want {
+				t.Errorf("件数 = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestMediaPlayWithoutURLCreatesOnePerPlayback(t *testing.T) {
+	// 同じ楽曲でも再生の都度1件作る（要件 §8.1）。
+	result := runNormalize(t, []*rawlog.Event{
+		mediaEventNoURL(t, "m1", 0, 5*min, 300, "曲名", "アーティスト"),
+		mediaEventNoURL(t, "m2", 30*min, 35*min, 300, "曲名", "アーティスト"),
+	}, 60*min)
+
+	plays := proposalsBySource(result, SourceMedia)
+	if len(plays) != 2 {
+		t.Fatalf("件数 = %d, want 2", len(plays))
+	}
+	if plays[0].ID == plays[1].ID {
+		t.Error("別の再生が同じIDになった")
 	}
 }
 
@@ -357,16 +453,19 @@ func TestMediaPlayCreatesOneURLogPerPlayback(t *testing.T) {
 	}
 }
 
-func TestMediaPlayDoesNotCreateTimeIs(t *testing.T) {
-	// YouTube / YouTube Music が作る Kyou は URLog のみ（要件 §8.1）。
+func TestMediaPlayWithURLDoesNotCreateTimeIs(t *testing.T) {
+	// URL を確定できた再生が作る Kyou は URLog のみ（要件 §8.1）。
+	// TimeIs も作ると同じ再生が二重に残る。
 	result := runNormalize(t, []*rawlog.Event{
 		mediaEvent(t, "m1", 0, 300, "https://www.youtube.com/watch?v=abc"),
 	}, 60*min)
 
-	for _, p := range result.Proposals {
-		if p.Kind == KindTimeIs {
-			t.Errorf("再生から TimeIs が作られた: %+v", p)
-		}
+	plays := proposalsBySource(result, SourceMedia)
+	if len(plays) != 1 {
+		t.Fatalf("件数 = %d, want 1", len(plays))
+	}
+	if plays[0].Kind != KindURLog {
+		t.Errorf("Kind = %q, want %q", plays[0].Kind, KindURLog)
 	}
 }
 
