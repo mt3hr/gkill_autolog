@@ -168,7 +168,6 @@ func mediaPlays(device rawlog.Device, events []*rawlog.Event) ([]Proposal, error
 				Kind:           KindURLog,
 				Device:         device,
 				Source:         SourceMedia,
-				Tags:           mediaServiceTags(payload.Service),
 				SourceEventIDs: []string{event.EventID},
 				URL:            payload.URL,
 				Title:          mediaTitle(payload),
@@ -190,7 +189,6 @@ func mediaPlays(device rawlog.Device, events []*rawlog.Event) ([]Proposal, error
 			Kind:           KindTimeIs,
 			Device:         device,
 			Source:         SourceMedia,
-			Tags:           mediaServiceTags(payload.Service),
 			SourceEventIDs: []string{event.EventID},
 			Title:          title,
 			StartTime:      timePtr(event.StartTime),
@@ -198,24 +196,6 @@ func mediaPlays(device rawlog.Device, events []*rawlog.Event) ([]Proposal, error
 		})
 	}
 	return proposals, nil
-}
-
-// mediaServiceTags は再生元サービスを表す追加タグを返す。
-//
-// 収集元タグ (autolog_media) だけでは動画と音楽を見分けられない。
-// Dnote はタグの一致で集計するため、分けて数えたいならタグとして出す。
-//
-// 知らないサービスには何も付けない。当てずっぽうのタグを付けると、
-// 集計が静かにずれる。
-func mediaServiceTags(service rawlog.MediaService) []string {
-	switch service {
-	case rawlog.ServiceYouTube:
-		return []string{TagYouTube}
-	case rawlog.ServiceYouTubeMusic:
-		return []string{TagYouTubeMusic}
-	default:
-		return nil
-	}
 }
 
 // mediaEndTime は再生の終了時刻を返す。

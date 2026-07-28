@@ -1,7 +1,6 @@
 package normalize
 
 import (
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -420,22 +419,20 @@ func TestMediaPlayWithoutURLObeysMinimumPlayedSeconds(t *testing.T) {
 	}
 }
 
-func TestMediaPlayTagsServiceSeparately(t *testing.T) {
-	// autolog_media だけでは動画と音楽を見分けられない。
-	// Dnote はタグの一致で集計するのでサービスをタグに出す。
+func TestMediaPlayTagsOnlyBySource(t *testing.T) {
+	// 再生に付くタグは収集元の autolog_media だけ。
+	// サービス別のタグ (YouTube / YouTube Music) は付けない。
 	tests := []struct {
 		name    string
 		service rawlog.MediaService
 		url     string
-		want    []string
 	}{
-		{name: "YouTubeのTimeIs", service: rawlog.ServiceYouTube, want: []string{TagYouTube}},
-		{name: "YouTube MusicのTimeIs", service: rawlog.ServiceYouTubeMusic, want: []string{TagYouTubeMusic}},
+		{name: "YouTubeのTimeIs", service: rawlog.ServiceYouTube},
+		{name: "YouTube MusicのTimeIs", service: rawlog.ServiceYouTubeMusic},
 		{
-			name: "URLogにも付ける", service: rawlog.ServiceYouTube,
-			url: "https://www.youtube.com/watch?v=abc", want: []string{TagYouTube},
+			name: "URLogも同じ", service: rawlog.ServiceYouTube,
+			url: "https://www.youtube.com/watch?v=abc",
 		},
-		{name: "知らないサービスには付けない", service: rawlog.MediaService("nicovideo"), want: nil},
 	}
 
 	for _, tt := range tests {
@@ -450,27 +447,10 @@ func TestMediaPlayTagsServiceSeparately(t *testing.T) {
 			if len(plays) != 1 {
 				t.Fatalf("件数 = %d, want 1", len(plays))
 			}
-			if !slices.Equal(plays[0].Tags, tt.want) {
-				t.Errorf("Tags = %v, want %v", plays[0].Tags, tt.want)
+			if plays[0].Source != SourceMedia {
+				t.Errorf("Source = %q, want %q", plays[0].Source, SourceMedia)
 			}
 		})
-	}
-}
-
-func TestMediaPlayTagsDoNotChangeProposalID(t *testing.T) {
-	// タグは ID の計算に入れない。入れると既に書いた分と ID が変わり、
-	// 台帳の重複判定をすり抜けて二重登録になる。
-	const url = "https://www.youtube.com/watch?v=abc"
-	result := runNormalize(t, []*rawlog.Event{
-		mediaEvent(t, "m1", 0, 300, url),
-	}, 60*min)
-
-	plays := proposalsBySource(result, SourceMedia)
-	if len(plays) != 1 {
-		t.Fatalf("件数 = %d, want 1", len(plays))
-	}
-	if want := makeID(KindURLog, SourceMedia, []string{"m1"}); plays[0].ID != want {
-		t.Errorf("ID = %q, want %q (タグが ID に混ざっている)", plays[0].ID, want)
 	}
 }
 

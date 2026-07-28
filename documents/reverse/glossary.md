@@ -54,34 +54,28 @@ gkill 本体の用語は [gkill の用語集](https://github.com/mt3hr/gkill/blo
 
 どの観測から来たかを表す区分。書き込む Kyou にタグとして付きます。
 
-| タグ | 何を観測したか |
-| --- | --- |
-| `autolog_device` | 端末そのものの利用（ロック解除〜ロック） |
-| `autolog_window` | 前面ウィンドウ／前面アプリ |
-| `autolog_browser` | ブラウザでのページ閲覧 |
-| `autolog_media` | 動画・音楽の再生 |
-| `autolog_wifi` | Wi-Fi の接続 |
-| `autolog_bluetooth` | Bluetooth 機器の接続 |
-| `autolog_charge` | 充電 |
-| `autolog_notification` | 通知 |
+**1つの Kyou に付くタグはこの1つだけです。** 他のタグは付きません。
 
-### 再生元サービス
+| タグ | Kyou | 何を観測したか |
+| --- | --- | --- |
+| `autolog_device` | TimeIs | 端末そのものの利用（ロック解除〜ロック） |
+| `autolog_window` | TimeIs | 前面ウィンドウ（Windows）／前面アプリ（Android） |
+| `autolog_browser` | URLog | ブラウザでのページ閲覧 |
+| `autolog_media` | URLog | 動画・音楽の再生（URL が分かるとき） |
+| `autolog_media` | TimeIs | 動画・音楽の再生（URL が分からないとき） |
+| `autolog_wifi` | TimeIs | Wi-Fi の接続 |
+| `autolog_bluetooth` | TimeIs | Bluetooth 機器の接続 |
+| `autolog_charge` | TimeIs | 充電 |
+| `autolog_notification` | Kmemo | 通知 |
 
-再生の Kyou には、収集元タグ `autolog_media` に足してサービスのタグが付きます。
-`autolog_media` だけでは動画と音楽を見分けられず、Dnote はタグの一致で
-集計するため、分けて数えられるようにしてあります。URLog にも TimeIs にも付きます。
+Dnote で絞るときは、タグだけでは URLog と TimeIs を区別できない行があるため、
+`TagEqualPredicate` と `DataTypePrefixPredicate` を組み合わせます。
 
-| タグ | 何を再生したか |
-| --- | --- |
-| `autolog_youtube` | YouTube（動画） |
-| `autolog_youtube_music` | YouTube Music（音楽） |
+**YouTube と YouTube Music は区別しません。** どちらも `autolog_media` です。
+サービス別のタグは付けないので、Dnote で動画と音楽を分けて集計することはできません。
 
-知らないサービスには何も付けません。当てずっぽうのタグを付けると集計が静かにずれます。
-
-このタグは Kyou の ID の計算には入りません。タグを増やしても既に書いた分と
-同じ ID になるため、台帳の重複判定はそのまま効きます。
-ただし**既に書き込んだ Kyou に後からタグは付きません。**
-台帳が「書き込み済み」として飛ばすためです。
+**既に書き込んだ Kyou に後からタグは付きません。** 台帳が「書き込み済み」として
+飛ばすため、タグを増やしても過去分は再取り込みでも埋まりません。
 
 ### 端末名 (device)
 
