@@ -135,13 +135,20 @@ func browserViews(device rawlog.Device, events []*rawlog.Event, denyList *DenyLi
 	return proposals, candidates, nil
 }
 
-// mediaPlays は media_play イベントを URLog へ変換する。
+// mediaPlays は media_play イベントを Kyou へ変換する。
 //
 // 実再生時間が MinPlayedSeconds 以上のものだけを残す。
 // 一時停止時間と広告再生時間は収集側で既に除いてある。
-// 同じ動画や楽曲でも再生の都度 URLog を作り、RelatedTime は再生開始時刻にする（要件 §8.1）。
+// 同じ動画や楽曲でも再生の都度1件作り、RelatedTime は再生開始時刻にする（要件 §8.1）。
 //
-// TimeIs は作らない。Claude の判定も通さない（残す条件が要件で決まっているため）。
+// URL が確定できたかどうかで作る Kyou の種類が変わる。
+//   - 確定できた: URLog。Chrome 拡張はページの URL を読めるので常にこちら
+//   - 確定できない: TimeIs。Android の MediaSession はタイトルしか返さないことが多い
+//
+// 検索URLや推測したURLは作らない（要件 §8.2）。TimeIs にはタイトル・アーティストという
+// 観測できた事実だけを載せ、URL の代わりを埋め合わせることはしない。
+//
+// Claude の判定は通さない（残す条件が要件で決まっているため）。
 func mediaPlays(device rawlog.Device, events []*rawlog.Event) ([]Proposal, error) {
 	var proposals []Proposal
 
@@ -151,27 +158,58 @@ func mediaPlays(device rawlog.Device, events []*rawlog.Event) ([]Proposal, error
 			return nil, err
 		}
 
-		// URL を取得できなかった再生は書き込まない。
-		// 検索URLや推測したURLを作ってはならない（要件 §8.2）。
-		if strings.TrimSpace(payload.URL) == "" {
-			continue
-		}
 		if payload.PlayedSeconds < MinPlayedSeconds {
 			continue
 		}
 
+		if strings.TrimSpace(payload.URL) != "" {
+			proposals = append(proposals, Proposal{
+				ID:             makeID(KindURLog, SourceMedia, []string{event.EventID}),
+				Kind:           KindURLog,
+				Device:         device,
+				Source:         SourceMedia,
+				SourceEventIDs: []string{event.EventID},
+				URL:            payload.URL,
+				Title:          mediaTitle(payload),
+				RelatedTime:    timePtr(event.StartTime),
+			})
+			continue
+		}
+
+		// URL が無い再生は TimeIs にする。
+		// タイトルまで無いと何を再生したのか分からず、区間だけが残る。
+		// それは app_usage の TimeIs と変わらないので作らない。
+		title := mediaTitle(payload)
+		if title == "" {
+			continue
+		}
+
 		proposals = append(proposals, Proposal{
-			ID:             makeID(KindURLog, SourceMedia, []string{event.EventID}),
-			Kind:           KindURLog,
+			ID:             makeID(KindTimeIs, SourceMedia, []string{event.EventID}),
+			Kind:           KindTimeIs,
 			Device:         device,
 			Source:         SourceMedia,
 			SourceEventIDs: []string{event.EventID},
-			URL:            payload.URL,
-			Title:          mediaTitle(payload),
-			RelatedTime:    timePtr(event.StartTime),
+			Title:          title,
+			StartTime:      timePtr(event.StartTime),
+			EndTime:        timePtr(mediaEndTime(event, payload)),
 		})
 	}
 	return proposals, nil
+}
+
+// mediaEndTime は再生の終了時刻を返す。
+//
+// 収集側が区間として記録していればその終了時刻を使う。実際に画面を見ていた
+// 時間帯そのものなので、一時停止を挟んでいても壁時計として正しい。
+//
+// 終了時刻が無い場合だけ、実再生秒数を足して埋める。この値は一時停止を
+// 含まないため実際の終了より早くなるが、再生を始めた事実は残せる。
+func mediaEndTime(event *rawlog.Event, payload rawlog.MediaPlayPayload) time.Time {
+	if event.EndTime != nil {
+		return *event.EndTime
+	}
+	return event.StartTime.Add(time.Duration(payload.PlayedSeconds * float64(time.Second)))
 }
 
 // mediaTitle は取得できた正式タイトルを返す。

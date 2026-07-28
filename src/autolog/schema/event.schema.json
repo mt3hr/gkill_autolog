@@ -129,12 +129,12 @@
     },
     "media_play": {
       "title": "media_play — YouTube / YouTube Music の1回の再生",
-      "description": "実再生秒数は一時停止時間と広告再生時間を含めない。URLが確定できない場合は url を空にし、書き込み対象から外れる。",
+      "description": "実再生秒数は一時停止時間と広告再生時間を含めない。url が入っていれば URLog、空なら TimeIs になる。",
       "type": "object",
       "required": ["service", "played_seconds"],
       "properties": {
         "service": { "type": "string", "enum": ["youtube", "youtube_music"] },
-        "url": { "type": "string", "description": "個別コンテンツの正式URL。推測・検索URLの生成は禁止。不明なら空文字。" },
+        "url": { "type": "string", "description": "個別コンテンツの正式URL。推測・検索URLの生成は禁止。確認できた動画IDから組み立てるのは可。不明なら空文字。" },
         "video_id": { "type": "string" },
         "title": { "type": "string", "description": "取得できた正式タイトル。" },
         "artist": { "type": "string" },
