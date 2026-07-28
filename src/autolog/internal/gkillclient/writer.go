@@ -195,7 +195,7 @@ func (w *Writer) describeUser(device rawlog.Device) string {
 // MCP 経由だった頃は create_device が mcp 固定で端末が残らず、
 // 端末タグが唯一の識別手段だったが、HTTP API を直接叩くようになって不要になった。
 func tagsFor(proposal normalize.Proposal) []string {
-	return []string{proposal.Source}
+	return append([]string{proposal.Source}, proposal.Tags...)
 }
 
 // waitForURLogRateLimit は add_urlog の間隔を空ける。
