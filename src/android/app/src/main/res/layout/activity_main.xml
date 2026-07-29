@@ -46,10 +46,30 @@
             android:layout_height="wrap_content"
             android:text="@string/label_capture_screenshots" />
 
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="@string/label_screenshot_interval" />
+
+        <EditText
+            android:id="@+id/screenshot_interval"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:autofillHints=""
+            android:inputType="number" />
+
+        <CheckBox
+            android:id="@+id/capture_on_unlock"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/label_capture_on_unlock" />
+
         <CheckBox
             android:id="@+id/record_location"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
             android:text="@string/label_record_location" />
 
         <TextView
@@ -64,6 +84,25 @@
             android:layout_height="wrap_content"
             android:autofillHints=""
             android:inputType="number" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="@string/label_location_accuracy" />
+
+        <EditText
+            android:id="@+id/location_accuracy"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:autofillHints=""
+            android:inputType="number" />
+
+        <CheckBox
+            android:id="@+id/high_accuracy_mode"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/label_high_accuracy_mode" />
 
         <Button
             android:id="@+id/save"

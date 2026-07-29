@@ -45,6 +45,14 @@ import java.util.concurrent.atomic.AtomicBoolean
 class AutologService : Service() {
 
     private val store: EventStore by lazy { EventStore(applicationContext) }
+
+    /**
+     * 位置情報の置き場。サービスで1つだけ開いて使い回す。
+     *
+     * 呼ぶたびに開くと、SQLite のハンドルが閉じられないまま増えていく。
+     */
+    private val gpsStore: GpsPointStore by lazy { GpsPointStore(applicationContext) }
+
     private val handler = Handler(Looper.getMainLooper())
 
     /**
@@ -92,7 +100,7 @@ class AutologService : Service() {
         media = MediaCollector(applicationContext, store)
         chromeHistory = ChromeHistoryCollector(store, applicationContext.cacheDir)
         screenshots = ScreenshotCollector(applicationContext, Config(applicationContext))
-        location = LocationCollector(applicationContext, GpsPointStore(applicationContext))
+        location = LocationCollector(applicationContext, gpsStore)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -134,9 +142,10 @@ class AutologService : Service() {
 
         // 溜まっている点を書き残さない。
         // onDestroy は主スレッドなので、ファイル入出力は投げてから短く待つ。
-        ioExecutor.execute { runCatching { GpxWriter(applicationContext).writeAll() } }
+        ioExecutor.execute { runCatching { GpxWriter(gpsStore).writeAll() } }
         ioExecutor.shutdown()
         runCatching { ioExecutor.awaitTermination(SHUTDOWN_WAIT_MS, TimeUnit.MILLISECONDS) }
+        runCatching { gpsStore.close() }
 
         store.put(
             Event.instant(
@@ -177,9 +186,14 @@ class AutologService : Service() {
         if (now - lastGpxWriteAt < GPX_WRITE_INTERVAL_MS) return
 
         lastGpxWriteAt = now
+
+        // 開始したときに無効だった provider を、ここで拾い直す。
+        // 機内モードを解除したあとなどに、購読が欠けたままにならないようにする。
+        location.ensureSubscribed()
+
         ioExecutor.execute {
             try {
-                GpxWriter(applicationContext).writeAll()
+                GpxWriter(gpsStore).writeAll()
             } catch (e: Exception) {
                 // 書けなかった分は点として残っているので、次回やり直す。
                 Log.i(TAG, "GPX を書けなかった。次回やり直す: ${e.message}")
@@ -253,13 +267,15 @@ class AutologService : Service() {
      *
      * 設定でオンにしていて、かつ権限があるときだけ。
      * どちらか欠けていると開始に失敗する。
+     *
+     * 権限の判定は [LocationCollector] と同じものを使う。
+     * 別々に書いていたころは、ここが FINE と COARSE のどちらでも通すのに
+     * 収集側は FINE だけを見ていたため、COARSE だけ許可した端末で
+     * 位置情報つきの常駐に入るのに何も記録されない、という食い違いが起きていた。
      */
     private fun canUseLocationForegroundService(): Boolean {
         if (!Config(applicationContext).recordLocation) return false
-        return ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) ==
-            PackageManager.PERMISSION_GRANTED ||
-            ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) ==
-            PackageManager.PERMISSION_GRANTED
+        return LocationCollector.hasLocationPermission(this)
     }
 
     private fun buildNotification(): Notification {

@@ -1,5 +1,6 @@
 package com.mt3hr.gkill_autolog.collect
 
+import android.app.KeyguardManager
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -13,14 +14,24 @@ import java.util.Date
 import java.util.Locale
 
 /**
- * 毎時00分にスクリーンショットを撮る。
+ * 決まった間隔でスクリーンショットを撮る。
+ *
+ * 撮影時刻は間隔で丸める。60分なら毎時00分、15分なら毎時00分・15分・30分・45分。
+ * 間隔は設定画面から変えられる。
  *
  * root の `screencap` を使う。MediaProjection API でも撮れるが、
  * 起動のたびに「画面の記録を開始しますか」の確認ダイアログが出るため、
- * 毎時無人で撮る用途には向かない。
+ * 無人で撮り続ける用途には向かない。
  *
- * 画面が消えている間は撮らない。撮り逃した時間の画像を後から補完もしない
- * （Windows 側と同じ扱い。要件 §10）。
+ * 画面が消えている間とロック中は撮らない（Windows 側と同じ扱い。要件 §10）。
+ *
+ * ただしスマホは大半の時間で画面が消えているので、区切りの時刻ちょうどを
+ * 待っているとほとんど撮れない。「撮り逃したら次に画面を点けたときに撮る」を
+ * 入れておくと、その区切りのぶんを画面が点いた時点で撮る。
+ *
+ * このとき記録するのは**実際に撮れた時刻**で、区切りの時刻ではない。
+ * 撮れなかった時間の画像をでっち上げないため。
+ * 「撮り逃した時間の画像を後から補完しない」は守られている。
  *
  * 撮った画像は共有ストレージへ置くだけ。そこから先へ運ぶのは
  * termux-tasker の dvnf.sh の役目で、AutoScreenshot_<端末>_<日付> にまとめられる。
@@ -32,29 +43,81 @@ class ScreenshotCollector(
     private val powerManager: PowerManager? =
         context.getSystemService(Context.POWER_SERVICE) as? PowerManager
 
-    /** 直近に撮った正時。同じ時刻で二度撮らないために持つ。 */
-    private var lastCapturedHour: Long = 0
+    private val keyguardManager: KeyguardManager? =
+        context.getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
+
+    /** 直近に処理した区切り。同じ区切りで二度撮らないために持つ。 */
+    private var lastCapturedBucket: Long = 0
+
+    /** 直近に使った撮影間隔。設定が変わったことに気づくために持つ。 */
+    private var lastIntervalMs: Long = 0
 
     /**
-     * 正時を過ぎていれば1枚撮る。サービスから定期的に呼ぶ。
+     * 画面が消えていて撮れなかった区切り。0 なら借りは無い。
+     *
+     * 画面が点いたときにここを見て撮り直す。持つのは最後の1つだけ。
+     * 何時間も消えていたあとに、その間の回数ぶんまとめて撮っても仕方がない。
+     */
+    private var pendingBucket: Long = 0
+
+    /**
+     * 撮影時刻を過ぎていれば1枚撮る。サービスから定期的に呼ぶ。
      * root コマンドの実行を伴うので、必ず別スレッドから呼ぶこと。
      */
     fun captureIfDue(now: Long = System.currentTimeMillis()) {
         if (!config.captureScreenshots) return
 
-        val hour = now / HOUR_MS * HOUR_MS
-        if (hour == lastCapturedHour) return
+        val intervalMs = config.screenshotIntervalMinutes * MINUTE_MS
 
-        // 画面が消えている間は撮らない。
-        if (powerManager?.isInteractive != true) {
-            // 撮らなかった正時も記録しておく。復帰した瞬間に撮ると
-            // 正時から離れた画像になるため、その時間はあきらめる。
-            lastCapturedHour = hour
+        // 間隔を変えた直後は、前の間隔で決めた区切りが残っている。
+        // そのままだと新しい間隔での最初の1回が飛ぶので、区切り直す。
+        if (intervalMs != lastIntervalMs) {
+            lastIntervalMs = intervalMs
+            lastCapturedBucket = 0
+            pendingBucket = 0
+        }
+
+        val bucket = now / intervalMs * intervalMs
+        val ready = canCaptureNow()
+
+        if (bucket != lastCapturedBucket) {
+            lastCapturedBucket = bucket
+
+            if (ready) {
+                // 区切りの時刻に撮れた。記録時刻も区切りに合わせる。
+                pendingBucket = 0
+                capture(bucket)
+                return
+            }
+
+            // 画面が消えているか、ロック画面が出ている。
+            // 設定が入っていれば、次に画面を点けたときに撮り直す。
+            pendingBucket = if (config.captureOnUnlock) bucket else 0
             return
         }
 
-        lastCapturedHour = hour
-        capture(hour)
+        // 撮り逃した区切りの借りを、画面が点いた時点で返す。
+        //
+        // 記録時刻は区切りではなく**実際に撮れた時刻**にする。
+        // 区切りの時刻を名乗らせると、撮れていない時間の画像を
+        // でっち上げることになるため。
+        if (pendingBucket != 0L && ready) {
+            pendingBucket = 0
+            Log.i(TAG, "撮り逃した区切りのぶんを、画面が点いたので撮る")
+            capture(now)
+        }
+    }
+
+    /**
+     * いま撮ってよいか。
+     *
+     * 画面が消えている間は撮らない。ロック画面が出ている間も撮らない。
+     * ロック画面を撮っても中身が無く、Windows 側もロック中は撮らない（要件 §10）。
+     */
+    private fun canCaptureNow(): Boolean {
+        if (powerManager?.isInteractive != true) return false
+        if (keyguardManager?.isKeyguardLocked == true) return false
+        return true
     }
 
     private fun capture(capturedAt: Long) {
@@ -124,6 +187,6 @@ class ScreenshotCollector(
 
     companion object {
         private const val TAG = "AutologScreenshot"
-        private const val HOUR_MS = 60 * 60 * 1000L
+        private const val MINUTE_MS = 60 * 1000L
     }
 }

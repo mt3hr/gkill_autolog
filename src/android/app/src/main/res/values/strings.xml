@@ -12,9 +12,13 @@
 
     <string name="label_device">端末名 (config.env に AUTOLOG_DEVICE があればそちらが優先)</string>
     <string name="label_read_chrome_history">Chrome の履歴を root で読む</string>
-    <string name="label_capture_screenshots">毎時スクリーンショットを撮る (root)</string>
+    <string name="label_capture_screenshots">スクリーンショットを定期的に撮る (root)</string>
+    <string name="label_screenshot_interval">撮影間隔（分。1〜1440。60 なら毎時00分）</string>
+    <string name="label_capture_on_unlock">撮り逃したら次に画面を点けたときに撮る（時刻は実際に撮れた時刻）</string>
     <string name="label_record_location">位置情報を記録する (GPX)</string>
     <string name="label_location_interval">記録間隔（秒。10〜3600。短いほど電池を使う）</string>
+    <string name="label_location_accuracy">許容誤差（m。5〜1000。これより粗い測位は記録しない）</string>
+    <string name="label_high_accuracy_mode">高精度モード（こまめに測位して精度の良い点を選ぶ。電池を多く使う）</string>
 
     <string name="action_save">保存</string>
     <string name="action_start">収集を開始</string>

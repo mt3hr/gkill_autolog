@@ -30,13 +30,16 @@ func Capture(cfg *config.Config, capturedAt time.Time) (*Result, error) {
 	return Save(img, cfg.ScreenshotDirFor(capturedAt), cfg.ScreenshotFileName(capturedAt, Extension), capturedAt)
 }
 
-// RunHourly は毎時00分に撮影し続ける。ctx が終わるまで返らない。
+// Run は設定した間隔で撮影し続ける。ctx が終わるまで返らない。
 //
 // 撮影に失敗しても収集全体は止めない。
 // 撮れなかった時間の画像を後から補完することはしない。
-func RunHourly(ctx context.Context, cfg *config.Config, logger *slog.Logger) error {
+func Run(ctx context.Context, cfg *config.Config, logger *slog.Logger) error {
+	interval := config.ClampScreenshotInterval(cfg.ScreenshotInterval)
+	logger.Info("スクリーンショットの定期撮影を始める", "interval", interval.String())
+
 	for {
-		next := nextHour(time.Now())
+		next := NextTick(time.Now(), interval)
 		timer := time.NewTimer(time.Until(next))
 
 		select {
@@ -44,11 +47,9 @@ func RunHourly(ctx context.Context, cfg *config.Config, logger *slog.Logger) err
 			timer.Stop()
 			return nil
 		case now := <-timer.C:
-			// タイマーの誤差で 59 分台に起きることがあるため、正時へ丸める。
-			capturedAt := now.Truncate(time.Hour)
-			if now.Sub(capturedAt) > 30*time.Minute {
-				capturedAt = capturedAt.Add(time.Hour)
-			}
+			// タイマーは狙った時刻より少し前に起きることがあるため、
+			// 最寄りの撮影時刻へ丸める。
+			capturedAt := RoundToTick(now, interval)
 
 			result, err := Capture(cfg, capturedAt)
 			switch {
@@ -64,9 +65,4 @@ func RunHourly(ctx context.Context, cfg *config.Config, logger *slog.Logger) err
 			}
 		}
 	}
-}
-
-// nextHour は次の正時を返す。
-func nextHour(now time.Time) time.Time {
-	return now.Truncate(time.Hour).Add(time.Hour)
 }

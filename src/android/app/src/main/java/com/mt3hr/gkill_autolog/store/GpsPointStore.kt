@@ -26,6 +26,7 @@ class GpsPointStore(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME,
               latitude   REAL NOT NULL,
               longitude  REAL NOT NULL,
               altitude   REAL,
+              accuracy   REAL,
               UNIQUE(local_date, at)
             )
             """.trimIndent()
@@ -33,29 +34,86 @@ class GpsPointStore(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME,
         db.execSQL("CREATE INDEX idx_gps_point_date ON gps_point(local_date, at)")
     }
 
+    /**
+     * 移行する。**テーブルを作り直してはいけない。**
+     *
+     * [com.mt3hr.gkill_autolog.export.GpxWriter] はその日の GPX を
+     * DB の全点から毎回作り直す。ここで点を消すと、次の書き出しで
+     * 書き出し済みの当日分の軌跡が短くなって消えてしまう。
+     */
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-        // まだ移行の必要が無い。作り直す。
-        db.execSQL("DROP TABLE IF EXISTS gps_point")
-        onCreate(db)
+        if (oldVersion < 2) {
+            // 移行前の点は精度が分からない。NULL のままにして「精度不明」として扱う。
+            db.execSQL("ALTER TABLE gps_point ADD COLUMN accuracy REAL")
+        }
     }
 
     /**
-     * 1点を記録する。
+     * その窓でいちばん精度の良い1点だけを残す。
      *
      * localDate は GPX のファイル名になる日付 (YYYYMMDD)。
-     * 同じ時刻の点は無視される。
+     * windowStart 以上 windowEnd 未満が1つの窓で、窓には常に1点しか入らない。
+     *
+     * 同じ窓に複数の provider から点が届く。以前は先に届いた点をそのまま採っていたので、
+     * 誤差 1km 級のセル測位が、2秒後に届く誤差 10m の GPS 測位に勝っていた。
+     * ここで精度を比べて、良いほうへ置き換える。
+     *
+     * メモリに溜めずその場で DB を更新するのは、途中でプロセスが落ちても
+     * そこまでの点を失わないようにするため。あとから良い点が来れば上書きされる。
+     *
+     * accuracy が null なのは精度が取れなかった点。順位はいちばん下に置くが、
+     * ほかに点が無ければ記録する。観測できた事実は残す。
      */
-    fun put(localDate: String, at: Long, latitude: Double, longitude: Double, altitude: Double?) {
-        val values = ContentValues().apply {
-            put("local_date", localDate)
-            put("at", at)
-            put("latitude", latitude)
-            put("longitude", longitude)
-            put("altitude", altitude)
+    fun putBest(
+        localDate: String,
+        windowStart: Long,
+        windowEnd: Long,
+        at: Long,
+        latitude: Double,
+        longitude: Double,
+        altitude: Double?,
+        accuracy: Double?,
+    ) {
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            val existing = db.query(
+                "gps_point",
+                arrayOf("COALESCE(accuracy, $UNKNOWN_ACCURACY) AS rank"),
+                "local_date = ? AND at >= ? AND at < ?",
+                arrayOf(localDate, windowStart.toString(), windowEnd.toString()),
+                null, null, "rank ASC", "1"
+            ).use { cursor ->
+                if (cursor.moveToFirst()) cursor.getDouble(0) else null
+            }
+
+            // すでに入っている点のほうが良ければ、そのままにする。
+            if (existing != null && existing <= (accuracy ?: UNKNOWN_ACCURACY)) {
+                db.setTransactionSuccessful()
+                return
+            }
+
+            if (existing != null) {
+                db.delete(
+                    "gps_point",
+                    "local_date = ? AND at >= ? AND at < ?",
+                    arrayOf(localDate, windowStart.toString(), windowEnd.toString()),
+                )
+            }
+
+            val values = ContentValues().apply {
+                put("local_date", localDate)
+                put("at", at)
+                put("latitude", latitude)
+                put("longitude", longitude)
+                put("altitude", altitude)
+                put("accuracy", accuracy)
+            }
+            db.insertWithOnConflict("gps_point", null, values, SQLiteDatabase.CONFLICT_REPLACE)
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
         }
-        writableDatabase.insertWithOnConflict(
-            "gps_point", null, values, SQLiteDatabase.CONFLICT_IGNORE
-        )
     }
 
     /** 指定した日の点を時刻順に返す。 */
@@ -63,10 +121,11 @@ class GpsPointStore(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME,
         val result = mutableListOf<GpsPoint>()
         readableDatabase.query(
             "gps_point",
-            arrayOf("at", "latitude", "longitude", "altitude"),
+            arrayOf("at", "latitude", "longitude", "altitude", "accuracy"),
             "local_date = ?", arrayOf(localDate), null, null, "at ASC"
         ).use { cursor ->
             val altitudeIndex = cursor.getColumnIndexOrThrow("altitude")
+            val accuracyIndex = cursor.getColumnIndexOrThrow("accuracy")
             while (cursor.moveToNext()) {
                 result.add(
                     GpsPoint(
@@ -74,6 +133,7 @@ class GpsPointStore(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME,
                         latitude = cursor.getDouble(cursor.getColumnIndexOrThrow("latitude")),
                         longitude = cursor.getDouble(cursor.getColumnIndexOrThrow("longitude")),
                         altitude = if (cursor.isNull(altitudeIndex)) null else cursor.getDouble(altitudeIndex),
+                        accuracy = if (cursor.isNull(accuracyIndex)) null else cursor.getDouble(accuracyIndex),
                     )
                 )
             }
@@ -115,10 +175,18 @@ class GpsPointStore(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME,
 
     companion object {
         private const val DATABASE_NAME = "autolog_gps.db"
-        private const val DATABASE_VERSION = 1
+        private const val DATABASE_VERSION = 2
 
         /** 点を残しておく日数。これより古い日は消す。 */
         const val RETENTION_DAYS = 7
+
+        /**
+         * 精度が分からない点の順位。
+         *
+         * 精度で並べるときに、値のある点より必ず後ろへ来るだけの大きさにする。
+         * 地球の円周より大きい値なので、実在する誤差と取り違えることはない。
+         */
+        private const val UNKNOWN_ACCURACY = 1.0e9
     }
 }
 
@@ -128,4 +196,6 @@ data class GpsPoint(
     val latitude: Double,
     val longitude: Double,
     val altitude: Double?,
+    /** 水平方向の誤差 (m)。取れなかった点は null。 */
+    val accuracy: Double?,
 )

@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 // writeConfigFile はテスト用の config.env を書く。
@@ -106,5 +107,80 @@ func TestLoadConfigFileHandlesBOM(t *testing.T) {
 	}
 	if settings["GKILL_USER"] != "user" {
 		t.Errorf("BOM 付きの先頭行を読めていない: %#v", settings)
+	}
+}
+
+// スクリーンショットの撮影間隔。設定しなければ毎時00分だったころと同じ1時間。
+func TestScreenshotIntervalDefault(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv(EnvHome, home)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.ScreenshotInterval != time.Hour {
+		t.Errorf("ScreenshotInterval = %s, want 1h", cfg.ScreenshotInterval)
+	}
+}
+
+func TestScreenshotIntervalFromConfigFile(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv(EnvHome, home)
+
+	writeConfigFile(t, home, "AUTOLOG_SCREENSHOT_INTERVAL=15m\n")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.ScreenshotInterval != 15*time.Minute {
+		t.Errorf("ScreenshotInterval = %s, want 15m", cfg.ScreenshotInterval)
+	}
+}
+
+// 単位を書き忘れやすいので、数値だけなら秒として読む。
+func TestScreenshotIntervalAcceptsBareSeconds(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv(EnvHome, home)
+	t.Setenv(EnvScreenshotInterval, "90")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.ScreenshotInterval != 90*time.Second {
+		t.Errorf("ScreenshotInterval = %s, want 90s", cfg.ScreenshotInterval)
+	}
+}
+
+// 範囲外の値と読めない値は、機械を使い潰さないよう丸める。
+func TestScreenshotIntervalIsClamped(t *testing.T) {
+	cases := []struct {
+		name  string
+		value string
+		want  time.Duration
+	}{
+		{"短すぎる", "1s", MinScreenshotInterval},
+		{"長すぎる", "48h", MaxScreenshotInterval},
+		{"負", "-5m", DefaultScreenshotInterval},
+		{"零", "0", DefaultScreenshotInterval},
+		{"読めない", "まいじ", DefaultScreenshotInterval},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv(EnvHome, home)
+			t.Setenv(EnvScreenshotInterval, c.value)
+
+			cfg, err := Load()
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if cfg.ScreenshotInterval != c.want {
+				t.Errorf("%q -> %s, want %s", c.value, cfg.ScreenshotInterval, c.want)
+			}
+		})
 	}
 }

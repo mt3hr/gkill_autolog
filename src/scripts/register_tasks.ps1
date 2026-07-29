@@ -67,6 +67,24 @@ $collectSettings = New-ScheduledTaskSettingsSet `
     -RestartCount 3 `
     -RestartInterval (New-TimeSpan -Minutes 1)
 
+# 実行条件は必ず明示する。
+#
+# 省略すると、登録したときの状況しだいで「ユーザーがログオンしているか
+# どうかにかかわらず実行する」(LogonType=Password) になることがある。
+# そうなるとタスクはセッション0で動き、入力デスクトップを開けなくなるため、
+# スクリーンショットも前面ウィンドウも記録されなくなる。しかもエラーには
+# ならず、ロック中と判定されて静かに撮影が飛ばされ続ける。
+# 実際にこれで2日ぶん記録が止まった。
+#
+# 黒いコンソールウィンドウは autolog collect が自分で隠すので、
+# 窓を消したいという理由でこの設定を変えてはいけない。
+#
+# 管理者権限は要らない。画面の取得にも前面ウィンドウの取得にも不要。
+$collectPrincipal = New-ScheduledTaskPrincipal `
+    -UserId "$env:USERDOMAIN\$env:USERNAME" `
+    -LogonType Interactive `
+    -RunLevel Limited
+
 # ---------------------------------------------------------------- 取り込み
 
 $importAction = New-ScheduledTaskAction `
@@ -81,7 +99,7 @@ $importSettings = New-ScheduledTaskSettingsSet `
     -ExecutionTimeLimit (New-TimeSpan -Hours 2)
 
 if ($WhatIfOnly) {
-    Write-Host "$collectTaskName : ログオン時に `"$autolog collect`""
+    Write-Host "$collectTaskName : ログオン時に `"$autolog collect`" (対話セッション・非昇格)"
     Write-Host "$importTaskName : 毎日 04:00 に `"$runImport`""
     Write-Host ''
     Write-Host '(-WhatIfOnly のため登録しない)'
@@ -89,8 +107,9 @@ if ($WhatIfOnly) {
 }
 
 Register-ScheduledTask -TaskName $collectTaskName -Action $collectAction -Trigger $collectTrigger `
+    -Principal $collectPrincipal `
     -Settings $collectSettings -Description 'gkill_autolog: 操作ログの常駐収集' -Force | Out-Null
-Write-Host "登録した: $collectTaskName (ログオン時)"
+Write-Host "登録した: $collectTaskName (ログオン時・対話セッション)"
 
 # StartWhenAvailable により、4時に電源が入っていなくても起動後に実行される。
 Register-ScheduledTask -TaskName $importTaskName -Action $importAction -Trigger $importTrigger `
