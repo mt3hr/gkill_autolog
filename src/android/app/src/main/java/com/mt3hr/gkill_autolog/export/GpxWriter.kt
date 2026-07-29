@@ -23,9 +23,15 @@ import java.util.TimeZone
  * (gps_log_repository_gpx_dir_impl.go の findGPXFileByDate)。
  * 日付はローカル日付で、中の時刻は UTC。
  */
-class GpxWriter(context: Context) {
+class GpxWriter(private val store: GpsPointStore) {
 
-    private val store = GpsPointStore(context.applicationContext)
+    /**
+     * 自分で [GpsPointStore] を開く。1回だけ使うとき用。
+     *
+     * 常駐して繰り返し呼ぶ場合は、開いたままの [GpsPointStore] を渡すこと。
+     * 呼ぶたびに開くと SQLite のハンドルが閉じられないまま増えていく。
+     */
+    constructor(context: Context) : this(GpsPointStore(context.applicationContext))
 
     /**
      * 点が入っている日をすべて書き出す。書き出した日数を返す。

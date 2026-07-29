@@ -27,12 +27,38 @@ class Config(context: Context) {
         set(value) = preferences.edit().putBoolean(KEY_READ_CHROME_HISTORY, value).apply()
 
     /**
-     * 毎時のスクリーンショットを撮るかどうか。
+     * 定期的にスクリーンショットを撮るかどうか。
      * root の screencap を使うため、root が無い端末では何も起きない。
      */
     var captureScreenshots: Boolean
         get() = preferences.getBoolean(KEY_CAPTURE_SCREENSHOTS, false)
         set(value) = preferences.edit().putBoolean(KEY_CAPTURE_SCREENSHOTS, value).apply()
+
+    /**
+     * スクリーンショットを撮る間隔（分）。
+     *
+     * 撮影時刻はこの間隔で丸める。60 なら毎時00分、15 なら毎時00分・15分・30分・45分。
+     * 極端な値にならないよう [MIN_SCREENSHOT_INTERVAL_MINUTES] 〜
+     * [MAX_SCREENSHOT_INTERVAL_MINUTES] に丸める。
+     */
+    var screenshotIntervalMinutes: Int
+        get() = preferences.getInt(KEY_SCREENSHOT_INTERVAL, DEFAULT_SCREENSHOT_INTERVAL_MINUTES)
+        set(value) = preferences.edit()
+            .putInt(KEY_SCREENSHOT_INTERVAL, clampScreenshotInterval(value))
+            .apply()
+
+    /**
+     * 撮り逃したとき、次に画面を点けた時点で撮り直すかどうか。
+     *
+     * 区切りの時刻に画面が消えていると撮れない。スマホは大半の時間で
+     * 画面が消えているので、これが無いとほとんど撮れない。
+     *
+     * 撮り直すときの記録時刻は、区切りの時刻ではなく**実際に撮れた時刻**にする。
+     * 撮れなかった時間の画像をでっち上げないため。
+     */
+    var captureOnUnlock: Boolean
+        get() = preferences.getBoolean(KEY_CAPTURE_ON_UNLOCK, true)
+        set(value) = preferences.edit().putBoolean(KEY_CAPTURE_ON_UNLOCK, value).apply()
 
     /**
      * 位置情報を記録するかどうか。
@@ -54,6 +80,32 @@ class Config(context: Context) {
         set(value) = preferences.edit()
             .putInt(KEY_LOCATION_INTERVAL, clampLocationInterval(value))
             .apply()
+
+    /**
+     * 記録してよい位置情報の誤差の上限（m）。
+     *
+     * これより粗い点は捨てる。屋内などで GPS が入らないとき、
+     * セル測位が誤差 1km 級の点を返すことがあり、そのまま記録すると
+     * 経路が大きく飛ぶ。取れなかった時間は点が無いままにして、
+     * 分からないものを埋めない。
+     */
+    var locationAccuracyMeters: Int
+        get() = preferences.getInt(KEY_LOCATION_ACCURACY, DEFAULT_LOCATION_ACCURACY_METERS)
+        set(value) = preferences.edit()
+            .putInt(KEY_LOCATION_ACCURACY, clampLocationAccuracy(value))
+            .apply()
+
+    /**
+     * 高精度モード。
+     *
+     * 記録間隔より短い周期で測位して、その間隔の中でいちばん精度の良い点を残す。
+     * 候補が増えるぶん精度は上がるが、測位の回数が増えるので電池を使う。
+     * オフにすると測位の回数は記録間隔どおりに戻る。
+     * どちらでも「いちばん精度の良い点を残す」動き自体は変わらない。
+     */
+    var highAccuracyMode: Boolean
+        get() = preferences.getBoolean(KEY_HIGH_ACCURACY_MODE, true)
+        set(value) = preferences.edit().putBoolean(KEY_HIGH_ACCURACY_MODE, value).apply()
 
     /**
      * 端末名を config.env に合わせる。
@@ -94,6 +146,10 @@ class Config(context: Context) {
         private const val KEY_CAPTURE_SCREENSHOTS = "capture_screenshots"
         private const val KEY_RECORD_LOCATION = "record_location"
         private const val KEY_LOCATION_INTERVAL = "location_interval_seconds"
+        private const val KEY_LOCATION_ACCURACY = "location_accuracy_meters"
+        private const val KEY_HIGH_ACCURACY_MODE = "location_high_accuracy"
+        private const val KEY_SCREENSHOT_INTERVAL = "screenshot_interval_minutes"
+        private const val KEY_CAPTURE_ON_UNLOCK = "capture_on_unlock"
 
         /** 位置情報の記録間隔の既定値と上下限（秒）。 */
         const val DEFAULT_LOCATION_INTERVAL_SECONDS = 60
@@ -103,6 +159,24 @@ class Config(context: Context) {
         /** 記録間隔を扱える範囲へ丸める。 */
         fun clampLocationInterval(seconds: Int): Int =
             seconds.coerceIn(MIN_LOCATION_INTERVAL_SECONDS, MAX_LOCATION_INTERVAL_SECONDS)
+
+        /** 許容する位置情報の誤差の既定値と上下限（m）。 */
+        const val DEFAULT_LOCATION_ACCURACY_METERS = 100
+        const val MIN_LOCATION_ACCURACY_METERS = 5
+        const val MAX_LOCATION_ACCURACY_METERS = 1000
+
+        /** 許容誤差を扱える範囲へ丸める。 */
+        fun clampLocationAccuracy(meters: Int): Int =
+            meters.coerceIn(MIN_LOCATION_ACCURACY_METERS, MAX_LOCATION_ACCURACY_METERS)
+
+        /** スクリーンショットの撮影間隔の既定値と上下限（分）。 */
+        const val DEFAULT_SCREENSHOT_INTERVAL_MINUTES = 60
+        const val MIN_SCREENSHOT_INTERVAL_MINUTES = 1
+        const val MAX_SCREENSHOT_INTERVAL_MINUTES = 1440
+
+        /** 撮影間隔を扱える範囲へ丸める。 */
+        fun clampScreenshotInterval(minutes: Int): Int =
+            minutes.coerceIn(MIN_SCREENSHOT_INTERVAL_MINUTES, MAX_SCREENSHOT_INTERVAL_MINUTES)
 
         /** config.env 側のキー。autolog の AUTOLOG_DEVICE と同じもの。 */
         private const val KEY_CONFIG_DEVICE = "AUTOLOG_DEVICE"

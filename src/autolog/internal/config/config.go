@@ -37,6 +37,10 @@ const (
 	// 「Windows利用」のように端末ごとに呼び分けたいときに設定する。
 	EnvUsageTitle = "AUTOLOG_USAGE_TITLE"
 
+	// EnvScreenshotInterval はスクリーンショットの撮影間隔。
+	// 1h / 30m / 15m のように書く。数値だけなら秒として読む。
+	EnvScreenshotInterval = "AUTOLOG_SCREENSHOT_INTERVAL"
+
 	// EnvSharedDir は収集アプリとの受け渡しに使うディレクトリ。
 	// config.env より先に決まる必要があるため、環境変数からしか設定できない。
 	EnvSharedDir = "AUTOLOG_SHARED_DIR"
@@ -67,6 +71,16 @@ const (
 	// ここに置くのは受け渡しに要るものだけで、raw.db と台帳は置かない。
 	// 共有ストレージは FUSE で、複数プロセスから SQLite を開くとロックが効かないため。
 	DefaultAndroidSharedDir = "/sdcard/gkill_autolog"
+	// DefaultScreenshotInterval はスクリーンショットの撮影間隔の既定値。
+	// 元は毎時00分の固定だったので、設定しなければそのときと同じ動きになる。
+	DefaultScreenshotInterval = time.Hour
+	// MinScreenshotInterval, MaxScreenshotInterval は撮影間隔の下限と上限。
+	//
+	// 下限を設けるのは、画面全体の取り込みと WebP への変換が軽くないため。
+	// 上限は1日。これより長い間隔は「撮らない」と変わらないので、
+	// 止めたいときは --no-screenshot を使う。
+	MinScreenshotInterval = 10 * time.Second
+	MaxScreenshotInterval = 24 * time.Hour
 	// URLogRateLimit は add_urlog の発行間隔。
 	// gkill サーバが add_urlog のたびに対象URLを再取得する (handle_add_urlog.go -> FillURLogField) ため、
 	// 連続投入するとサーバから大量の外向きフェッチが出る。
@@ -89,6 +103,9 @@ type Config struct {
 	// ScreenshotDir はスクリーンショットの置き場。日付では分けない。
 	// ここから先へ運ぶのは同期スクリプトの dvnf move の役目。
 	ScreenshotDir string
+	// ScreenshotInterval は定期撮影の間隔。
+	// 撮影時刻はこの間隔で丸めるので、1h なら毎時00分になる。
+	ScreenshotInterval time.Duration
 	// GkillBaseURL, GkillUser, GkillPasswordSHA256 は取り込み先 gkill の接続情報。
 	GkillBaseURL        string
 	GkillUser           string
@@ -198,6 +215,7 @@ func Load() (*Config, error) {
 		IngestAddr:          lookupOr(EnvIngestAddr, DefaultIngestAddr),
 		IngestToken:         lookup(EnvIngestToken),
 		ScreenshotDir:       screenshotDir,
+		ScreenshotInterval:  ClampScreenshotInterval(ParseDuration(lookup(EnvScreenshotInterval), DefaultScreenshotInterval)),
 		GkillBaseURL:        lookupOr(EnvGkillBaseURL, DefaultGkillBaseURL),
 		GkillUser:           lookup(EnvGkillUser),
 		GkillPasswordSHA256: lookup(EnvGkillPasswordSHA),
@@ -425,17 +443,32 @@ func (c *Config) TokenPath(fileName string) string {
 	return filepath.Join(c.Home, fileName)
 }
 
-// ParseDurationEnv は環境変数を time.Duration として読む。未設定・不正なら fallback を返す。
-func ParseDurationEnv(key string, fallback time.Duration) time.Duration {
-	v := os.Getenv(key)
-	if v == "" {
+// ParseDuration は設定値を time.Duration として読む。未設定・不正なら fallback を返す。
+//
+// 環境変数と config.env のどちらから来た値も同じように扱えるよう、
+// 値そのものを受け取る。1h / 30m のような書式のほか、
+// 単位を書き忘れやすいので数値だけなら秒として読む。
+func ParseDuration(value string, fallback time.Duration) time.Duration {
+	value = strings.TrimSpace(value)
+	if value == "" {
 		return fallback
 	}
-	if d, err := time.ParseDuration(v); err == nil {
+	if d, err := time.ParseDuration(value); err == nil {
 		return d
 	}
-	if n, err := strconv.Atoi(v); err == nil {
+	if n, err := strconv.Atoi(value); err == nil {
 		return time.Duration(n) * time.Second
 	}
 	return fallback
+}
+
+// ClampScreenshotInterval は撮影間隔を扱える範囲へ丸める。
+//
+// 0 以下は「設定し忘れ」として既定値に戻す。
+// 極端に短い値で機械を使い潰さないよう上下限で押さえる。
+func ClampScreenshotInterval(interval time.Duration) time.Duration {
+	if interval <= 0 {
+		return DefaultScreenshotInterval
+	}
+	return min(max(interval, MinScreenshotInterval), MaxScreenshotInterval)
 }

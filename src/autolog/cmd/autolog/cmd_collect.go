@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/mt3hr/gkill_autolog/src/autolog/internal/collect"
 	"github.com/mt3hr/gkill_autolog/src/autolog/internal/config"
@@ -17,8 +18,9 @@ import (
 
 func newCollectCmd() *cobra.Command {
 	var (
-		logLevel     string
-		noScreenshot bool
+		logLevel           string
+		noScreenshot       bool
+		screenshotInterval time.Duration
 	)
 
 	cmd := &cobra.Command{
@@ -35,10 +37,21 @@ func newCollectCmd() *cobra.Command {
 				return err
 			}
 
+			// フラグでの指定は設定より優先する。
+			// 一度だけ間隔を変えて試したいときに設定ファイルを書き換えずに済む。
+			if cmd.Flags().Changed("screenshot-interval") {
+				cfg.ScreenshotInterval = config.ClampScreenshotInterval(screenshotInterval)
+			}
+
 			logger, err := newLogger(logLevel)
 			if err != nil {
 				return err
 			}
+
+			// ログオン時のタスクから起動されると黒い窓が出たままになる。
+			// 窓を消すためにセッション0で動かすと画面が取れなくなるので、
+			// 対話セッションのまま窓だけ隠す。
+			hideConsoleIfLaunchedByScheduler(logger)
 
 			store, err := rawlog.OpenStore(cfg.RawDBPath())
 			if err != nil {
@@ -64,7 +77,7 @@ func newCollectCmd() *cobra.Command {
 				logger.Info("スクリーンショットの定期撮影を行わない")
 			} else {
 				group.Go(func() error {
-					return shot.RunHourly(groupCtx, cfg, logger)
+					return shot.Run(groupCtx, cfg, logger)
 				})
 			}
 			group.Go(func() error {
@@ -80,7 +93,9 @@ func newCollectCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&logLevel, "log", "info", "ログレベル (debug, info, warn, error)")
 	cmd.Flags().BoolVar(&noScreenshot, "no-screenshot", false,
-		"毎時00分のスクリーンショットを撮らない。タスクスケジューラから autolog screenshot を回す場合に使う")
+		"定期スクリーンショットを撮らない。タスクスケジューラから autolog screenshot を回す場合に使う")
+	cmd.Flags().DurationVar(&screenshotInterval, "screenshot-interval", config.DefaultScreenshotInterval,
+		"スクリーンショットの撮影間隔。指定すると "+config.EnvScreenshotInterval+" より優先する")
 	return cmd
 }
 

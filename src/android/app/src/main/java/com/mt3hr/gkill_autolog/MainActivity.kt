@@ -44,20 +44,30 @@ class MainActivity : AppCompatActivity() {
         val deviceInput = findViewById<EditText>(R.id.device)
         val chromeCheckBox = findViewById<CheckBox>(R.id.read_chrome_history)
         val screenshotCheckBox = findViewById<CheckBox>(R.id.capture_screenshots)
+        val screenshotIntervalInput = findViewById<EditText>(R.id.screenshot_interval)
+        val captureOnUnlockCheckBox = findViewById<CheckBox>(R.id.capture_on_unlock)
         val locationCheckBox = findViewById<CheckBox>(R.id.record_location)
         val locationIntervalInput = findViewById<EditText>(R.id.location_interval)
+        val locationAccuracyInput = findViewById<EditText>(R.id.location_accuracy)
+        val highAccuracyCheckBox = findViewById<CheckBox>(R.id.high_accuracy_mode)
 
         deviceInput.setText(config.device)
         chromeCheckBox.isChecked = config.readChromeHistory
         screenshotCheckBox.isChecked = config.captureScreenshots
+        screenshotIntervalInput.setText(config.screenshotIntervalMinutes.toString())
+        captureOnUnlockCheckBox.isChecked = config.captureOnUnlock
         locationCheckBox.isChecked = config.recordLocation
         locationIntervalInput.setText(config.locationIntervalSeconds.toString())
+        locationAccuracyInput.setText(config.locationAccuracyMeters.toString())
+        highAccuracyCheckBox.isChecked = config.highAccuracyMode
 
         findViewById<Button>(R.id.save).setOnClickListener {
             config.device = deviceInput.text.toString()
             config.readChromeHistory = chromeCheckBox.isChecked
             config.captureScreenshots = screenshotCheckBox.isChecked
+            config.captureOnUnlock = captureOnUnlockCheckBox.isChecked
             config.recordLocation = locationCheckBox.isChecked
+            config.highAccuracyMode = highAccuracyCheckBox.isChecked
 
             // 空欄や範囲外はそのまま使わず、扱える値へ丸めて画面へ返す。
             val interval = Config.clampLocationInterval(
@@ -66,6 +76,20 @@ class MainActivity : AppCompatActivity() {
             )
             config.locationIntervalSeconds = interval
             locationIntervalInput.setText(interval.toString())
+
+            val accuracy = Config.clampLocationAccuracy(
+                locationAccuracyInput.text.toString().toIntOrNull()
+                    ?: Config.DEFAULT_LOCATION_ACCURACY_METERS
+            )
+            config.locationAccuracyMeters = accuracy
+            locationAccuracyInput.setText(accuracy.toString())
+
+            val screenshotInterval = Config.clampScreenshotInterval(
+                screenshotIntervalInput.text.toString().toIntOrNull()
+                    ?: Config.DEFAULT_SCREENSHOT_INTERVAL_MINUTES
+            )
+            config.screenshotIntervalMinutes = screenshotInterval
+            screenshotIntervalInput.setText(screenshotInterval.toString())
 
             // 収集中なら、新しい設定で購読し直させる。
             AutologService.reloadSettings(this)
