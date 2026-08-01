@@ -28,6 +28,9 @@ const processQueryLimitedInformation = 0x1000
 type ForegroundWindow struct {
 	// AppName は実行ファイル名から拡張子を除いたもの（例: chrome, Code）。
 	AppName string
+	// AppDisplayName は実行ファイルの説明（例: Google Chrome, Visual Studio Code）。
+	// バージョン情報を持たない実行ファイルでは取れないので、その場合は空。
+	AppDisplayName string
 	// WindowTitle は前面ウィンドウの完全なタイトル。整形も切り詰めもしない。
 	WindowTitle string
 	// ProcessPath は実行ファイルの絶対パス。取得できなければ空。
@@ -63,6 +66,7 @@ func GetForegroundWindow() (ForegroundWindow, bool, error) {
 	}
 	info.ProcessPath = path
 	info.AppName = strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+	info.AppDisplayName = FileDescription(path)
 	return info, true, nil
 }
 

@@ -52,13 +52,14 @@ func (c *windowCollector) run(ctx context.Context) error {
 		lastKind winapi.InputKind
 
 		// いま記録しているウィンドウと、そこで最後に入力があった時刻。
-		currentApp   string
-		currentTitle string
-		currentPID   uint32
-		currentPath  string
-		lastInput    time.Time
-		lastEmitted  time.Time
-		tracking     bool
+		currentApp     string
+		currentDisplay string
+		currentTitle   string
+		currentPID     uint32
+		currentPath    string
+		lastInput      time.Time
+		lastEmitted    time.Time
+		tracking       bool
 	)
 
 	// emit は現在追跡しているウィンドウの入力イベントを1件書き出す。
@@ -67,11 +68,12 @@ func (c *windowCollector) run(ctx context.Context) error {
 			return
 		}
 		c.emitter.Emit(rawlog.EventInput, lastInput, nil, rawlog.InputPayload{
-			AppName:     currentApp,
-			WindowTitle: currentTitle,
-			ProcessPath: currentPath,
-			PID:         int(currentPID),
-			Kind:        string(lastKind),
+			AppName:        currentApp,
+			AppDisplayName: currentDisplay,
+			WindowTitle:    currentTitle,
+			ProcessPath:    currentPath,
+			PID:            int(currentPID),
+			Kind:           string(lastKind),
 		})
 		lastEmitted = lastInput
 	}
@@ -117,6 +119,7 @@ func (c *windowCollector) run(ctx context.Context) error {
 					emit()
 				}
 				currentApp = info.AppName
+				currentDisplay = info.AppDisplayName
 				currentTitle = info.WindowTitle
 				currentPID = info.PID
 				currentPath = info.ProcessPath

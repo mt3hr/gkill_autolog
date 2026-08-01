@@ -21,7 +21,7 @@ func runWindow(t *testing.T, inputs []inputAt, cutoff time.Duration) ([]interval
 	events := make([]*rawlog.Event, 0, len(inputs))
 	for i, in := range inputs {
 		events = append(events, event(t, eventID(i), rawlog.EventInput, in.at, nil,
-			rawlog.InputPayload{AppName: in.app, WindowTitle: in.title}))
+			rawlog.InputPayload{AppDisplayName: in.display, AppName: in.app, WindowTitle: in.title}))
 	}
 
 	result, err := Run(events, Options{Cutoff: base().Add(cutoff)})
@@ -44,9 +44,11 @@ func runWindow(t *testing.T, inputs []inputAt, cutoff time.Duration) ([]interval
 }
 
 type inputAt struct {
-	at    time.Duration
-	app   string
-	title string
+	at time.Duration
+	// display は実行ファイルの説明。空なら app へフォールバックする。
+	display string
+	app     string
+	title   string
 }
 
 const (
@@ -111,17 +113,17 @@ func TestWindowSessionMergesShortInterruption(t *testing.T) {
 		wantIntervals []interval
 	}{
 		{
-			// 1分以内に元のウィンドウへ戻ったら前後を結合し、割り込みは TimeIs にしない。
+			// 1分以内に元のアプリへ戻ったら前後を結合し、割り込みは TimeIs にしない。
 			name:          "1分ちょうどで戻れば結合",
 			returnAt:      70*sec + 1*min,
-			wantIntervals: []interval{{title: "A", start: 0, end: 70*sec + 1*min + 70*sec}},
+			wantIntervals: []interval{{title: "Code", start: 0, end: 70*sec + 1*min + 70*sec}},
 		},
 		{
 			name:     "1分を超えたら結合しない",
 			returnAt: 70*sec + 1*min + sec,
 			wantIntervals: []interval{
-				{title: "A", start: 0, end: 70 * sec},
-				{title: "A", start: 70*sec + 1*min + sec, end: 70*sec + 1*min + sec + 70*sec},
+				{title: "Code", start: 0, end: 70 * sec},
+				{title: "Code", start: 70*sec + 1*min + sec, end: 70*sec + 1*min + sec + 70*sec},
 			},
 		},
 	}
@@ -150,7 +152,7 @@ func TestWindowSessionMergesShortInterruption(t *testing.T) {
 }
 
 func TestWindowSessionMergesConsecutiveInterruptions(t *testing.T) {
-	// 割り込みが2つ続いても、元のウィンドウへ1分以内に戻っていれば結合する。
+	// 割り込みが2つ続いても、元のアプリへ1分以内に戻っていれば結合する。
 	intervals, _ := runWindow(t, []inputAt{
 		{at: 0, app: "Code", title: "A"},
 		{at: 70 * sec, app: "Code", title: "A"},
@@ -163,8 +165,8 @@ func TestWindowSessionMergesConsecutiveInterruptions(t *testing.T) {
 	if len(intervals) != 1 {
 		t.Fatalf("区間数 = %d, want 1 (%+v)", len(intervals), intervals)
 	}
-	if intervals[0].title != "A" || intervals[0].start != 0 || intervals[0].end != 170*sec {
-		t.Errorf("区間 = %+v, want A 0..170s", intervals[0])
+	if intervals[0].title != "Code" || intervals[0].start != 0 || intervals[0].end != 170*sec {
+		t.Errorf("区間 = %+v, want Code 0..170s", intervals[0])
 	}
 }
 
@@ -198,8 +200,8 @@ func TestWindowSessionInProgressIsDeferred(t *testing.T) {
 	if len(intervals) != 1 {
 		t.Fatalf("区間数 = %d, want 1 (継続中のものは出さない) (%+v)", len(intervals), intervals)
 	}
-	if intervals[0].title != "A" {
-		t.Errorf("出力された区間 = %q, want A", intervals[0].title)
+	if intervals[0].title != "Code" {
+		t.Errorf("出力された区間 = %q, want Code", intervals[0].title)
 	}
 	if cursor != 50*min {
 		t.Errorf("SafeCursor = %v, want %v (継続中セッションの開始時刻)", cursor, 50*min)
@@ -259,20 +261,73 @@ func TestWindowSessionMinimumIsCheckedAfterMerging(t *testing.T) {
 	if len(intervals) != 1 {
 		t.Fatalf("区間数 = %d, want 1 (%+v)", len(intervals), intervals)
 	}
-	if intervals[0].title != "A" || intervals[0].end-intervals[0].start != 70*sec {
-		t.Errorf("区間 = %+v, want A の 0..70s", intervals[0])
+	if intervals[0].title != "Code" || intervals[0].end-intervals[0].start != 70*sec {
+		t.Errorf("区間 = %+v, want Code の 0..70s", intervals[0])
 	}
 }
 
-func TestWindowSessionUsesRawWindowTitle(t *testing.T) {
-	// アプリ名とウィンドウタイトルを生の値に近い状態で使う。整形しない（要件 §6.4）。
-	const raw = "main.go - gkill - Visual Studio Code"
+func TestWindowSessionUsesAppNameOnly(t *testing.T) {
+	// タイトルには表示上のアプリ名だけを使う（要件 §6.4）。
+	// 開いているファイル名やページ名を混ぜない。
+	tests := []struct {
+		name    string
+		display string
+		app     string
+		title   string
+		want    string
+	}{
+		{
+			name:    "実行ファイルの説明があればそれを使う",
+			display: "Visual Studio Code",
+			app:     "Code",
+			title:   "main.go - gkill - Visual Studio Code",
+			want:    "Visual Studio Code",
+		},
+		{
+			name:  "説明が取れなければ実行ファイル名",
+			app:   "chrome",
+			title: "ホーム / X - Google Chrome",
+			want:  "chrome",
+		},
+		{
+			// アプリ名がまったく取れないのは権限不足などの例外的な場合。
+			// タイトルを空にしないための保険としてウィンドウタイトルを使う。
+			name:  "アプリ名が無ければウィンドウタイトル",
+			title: "無題 - メモ帳",
+			want:  "無題 - メモ帳",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			intervals, _ := runWindow(t, []inputAt{
+				{at: 0, display: tt.display, app: tt.app, title: tt.title},
+				{at: 1 * min, display: tt.display, app: tt.app, title: tt.title},
+			}, 60*min)
+
+			if len(intervals) != 1 || intervals[0].title != tt.want {
+				t.Errorf("タイトル = %+v, want %q", intervals, tt.want)
+			}
+		})
+	}
+}
+
+func TestWindowSessionIgnoresTitleChangesWithinSameApp(t *testing.T) {
+	// 同じアプリを触り続けている間は、タブやファイルを切り替えても区間を切らない。
+	// 切ってしまうと同じタイトルの TimeIs が延々と並び、
+	// 1分未満の断片は MinWindowDuration で落ちて間に穴が空く。
 	intervals, _ := runWindow(t, []inputAt{
-		{at: 0, app: "Code", title: raw},
-		{at: 1 * min, app: "Code", title: raw},
+		{at: 0, display: "Google Chrome", app: "chrome", title: "ホーム / X - Google Chrome"},
+		{at: 30 * sec, display: "Google Chrome", app: "chrome", title: "YouTube - Google Chrome"},
+		{at: 60 * sec, display: "Google Chrome", app: "chrome", title: "新しいタブ - Google Chrome"},
+		{at: 90 * sec, display: "Google Chrome", app: "chrome", title: "gkill"},
 	}, 60*min)
 
-	if len(intervals) != 1 || intervals[0].title != raw {
-		t.Errorf("タイトル = %+v, want %q", intervals, raw)
+	if len(intervals) != 1 {
+		t.Fatalf("区間数 = %d, want 1 (%+v)", len(intervals), intervals)
+	}
+	want := interval{title: "Google Chrome", start: 0, end: 90 * sec}
+	if intervals[0] != want {
+		t.Errorf("区間 = %+v, want %+v", intervals[0], want)
 	}
 }

@@ -92,12 +92,16 @@ type Event struct {
 }
 
 // InputPayload は EventInput の payload。
+//
+// AppDisplayName は gkill のタイトルに使う表示上のアプリ名。
+// 実行ファイルの説明を取れなかった場合と、この項目ができる前に集めた生ログでは空になる。
 type InputPayload struct {
-	AppName     string `json:"app_name"`
-	WindowTitle string `json:"window_title"`
-	ProcessPath string `json:"process_path,omitempty"`
-	PID         int    `json:"pid,omitempty"`
-	Kind        string `json:"kind,omitempty"` // click / wheel / key
+	AppName        string `json:"app_name"`
+	AppDisplayName string `json:"app_display_name,omitempty"`
+	WindowTitle    string `json:"window_title"`
+	ProcessPath    string `json:"process_path,omitempty"`
+	PID            int    `json:"pid,omitempty"`
+	Kind           string `json:"kind,omitempty"` // click / wheel / key
 }
 
 // SessionAction は SessionPayload.Action の値。

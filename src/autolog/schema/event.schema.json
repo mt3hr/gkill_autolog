@@ -63,7 +63,8 @@
       "required": ["app_name", "window_title"],
       "properties": {
         "app_name": { "type": "string", "description": "実行ファイル名から拡張子を除いたもの (例: chrome, Code)。" },
-        "window_title": { "type": "string", "description": "前面ウィンドウの完全なタイトル。整形しない。" },
+        "app_display_name": { "type": "string", "description": "実行ファイルの説明 (例: Google Chrome, Visual Studio Code)。gkill のタイトルにはこれを使う。取れなければ無い。" },
+        "window_title": { "type": "string", "description": "前面ウィンドウの完全なタイトル。整形しない。gkill へは出さない。" },
         "process_path": { "type": "string" },
         "pid": { "type": "integer" },
         "kind": { "type": "string", "enum": ["click", "wheel", "key"] }
