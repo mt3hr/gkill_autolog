@@ -59,7 +59,12 @@ const (
 	// MinPlayedSeconds はこれ未満しか再生されなかったコンテンツを URLog にしない（要件 §8.1）。
 	MinPlayedSeconds = 30
 	// MinAppUsage はこれ未満のアプリ利用を TimeIs にしない（要件 §11.2）。
-	MinAppUsage = 30 * time.Second
+	//
+	// PC 側の MinWindowDuration と同じ値にする。
+	// どちらも「一瞬触っただけの操作は残さない」という同じ判断なので、
+	// 端末の種類で基準が変わる理由がない。
+	// 判定は結合を済ませたあとの長さで行う。
+	MinAppUsage = time.Minute
 	// WifiMergeWindow はこの時間内の再接続を結合する（要件 §9.1）。
 	WifiMergeWindow = 30 * time.Second
 	// BluetoothMergeWindow はこの時間内の再接続を結合する（要件 §9.2）。
