@@ -17,9 +17,11 @@ PowerShell スクリプトで構成される。MIT ライセンス。
 
 | コマンド | 用途 |
 | --- | --- |
-| `.\src\scripts\build.ps1` | この機械向けにビルド（`autolog.exe` を出す） |
-| `.\src\scripts\build_android.ps1` | Android (arm64) 向けにビルドして配布 |
-| `.\src\scripts\build_android.ps1 -SkipUpload` | ビルドのみ |
+| `npm run build` | Windows 向けにビルド（`release/windows_amd64/autolog.exe` を出す） |
+| `npm run build_android_arm64` | Android (arm64) 向けにビルドのみ |
+| `npm run deploy_android` | Android (arm64) 向けにビルドして配布 |
+| `npm run build_android_apk` | 収集アプリの APK を作る |
+| `npm run release` | 全プラットフォーム向けにビルドして成果物を検査 |
 | `cd src\autolog && go test ./...` | Go のテスト |
 | `cd src\android && .\gradlew.bat --% assembleDebug -PversionName=X -PversionCode=N` | APK |
 | `.\src\scripts\check_connection.ps1` | gkill へ繋がるか確認（書き込まない） |

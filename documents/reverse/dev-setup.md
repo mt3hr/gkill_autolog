@@ -16,26 +16,27 @@ CGO は使いません。SQLite は純 Go の実装なので、C コンパイラ
 ### この機械向け
 
 ```powershell
-.\src\scripts\build.ps1
+npm run build
 ```
 
-リポジトリ直下に `autolog.exe` ができます。取り込みスクリプトはこの場所を見ます。
+`release/windows_amd64/autolog.exe` ができます。取り込みスクリプトはこの場所を見ます。
 
 直接叩く場合は次のとおりです。
 
 ```powershell
 cd src\autolog
-go build -o ..\..\autolog.exe .\cmd\autolog
+go build -o ..\..\release\windows_amd64\autolog.exe .\cmd\autolog
 ```
 
 ### Android (arm64) 向け
 
 ```powershell
-.\src\scripts\build_android.ps1            # ビルドして配布まで
-.\src\scripts\build_android.ps1 -SkipUpload # ビルドだけ
+npm run build_android_arm64  # ビルドだけ
+npm run deploy_android       # ビルドして配布まで
 ```
 
-`release/autolog` ができます。出力が本当に ARM64 の ELF かをスクリプトが確認します。
+`release/android_arm64/autolog` ができます。
+出力が本当に ARM64 の ELF かを `verify_release_artifacts.mjs` が確認します。
 
 **`CGO_ENABLED=0` が必要です。** Windows 上で NDK の clang を指定すると、
 Go がネイティブのコンパイラへ切り替わり、中身が Windows のバイナリ (MZ) のまま
