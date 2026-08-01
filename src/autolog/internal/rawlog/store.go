@@ -57,7 +57,29 @@ CREATE TABLE IF NOT EXISTS open_state_interval (
   event_ids  TEXT NOT NULL,
   PRIMARY KEY (device, source, state_key)
 );
+
+CREATE TABLE IF NOT EXISTS notification_seen (
+  device       TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  last_at      TEXT NOT NULL,
+  PRIMARY KEY (device, content_hash)
+);
 `
+
+// migrateSQL は既存の raw.db へ後から足した列。
+//
+// CREATE TABLE IF NOT EXISTS は既にある表を作り替えないので、
+// 列の追加はここで行う。既に列があれば実行しない。
+var migrateSQL = []struct {
+	table  string
+	column string
+	sql    string
+}{
+	// 接続区間だけでなく、アプリ利用やメディア再生の末尾も持ち越すようになった。
+	// それらは「まだ終わっていない」のではなく「もっと延びるかもしれない」区間なので、
+	// 暫定の終了時刻を持つ。接続区間ではこの列は NULL のまま。
+	{table: "open_state_interval", column: "end_time", sql: `ALTER TABLE open_state_interval ADD COLUMN end_time TEXT`},
+}
 
 // OpenStore は raw.db を開き、必要ならスキーマを作成する。
 func OpenStore(path string) (*Store, error) {
@@ -72,7 +94,48 @@ func OpenStore(path string) (*Store, error) {
 	if _, err := db.Exec(createTableSQL); err != nil {
 		return nil, errors.Join(fmt.Errorf("failed to create schema in %s: %w", path, err), db.Close())
 	}
+	if err := migrate(db); err != nil {
+		return nil, errors.Join(fmt.Errorf("failed to migrate schema in %s: %w", path, err), db.Close())
+	}
 	return &Store{db: db, path: path}, nil
+}
+
+// migrate は後から足した列を必要なら追加する。
+func migrate(db *sql.DB) error {
+	for _, m := range migrateSQL {
+		exists, err := hasColumn(db, m.table, m.column)
+		if err != nil {
+			return err
+		}
+		if exists {
+			continue
+		}
+		if _, err := db.Exec(m.sql); err != nil {
+			return fmt.Errorf("failed to add column %s.%s: %w", m.table, m.column, err)
+		}
+	}
+	return nil
+}
+
+// hasColumn は表に列があるかを返す。
+func hasColumn(db *sql.DB, table string, column string) (bool, error) {
+	// table はコード内の定数なので、プレースホルダを使えない pragma へ直接埋めてよい。
+	rows, err := db.Query(`SELECT name FROM pragma_table_info(?)`, table)
+	if err != nil {
+		return false, fmt.Errorf("failed to read columns of %s: %w", table, err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return false, fmt.Errorf("failed to scan column of %s: %w", table, err)
+		}
+		if name == column {
+			return true, rows.Err()
+		}
+	}
+	return false, rows.Err()
 }
 
 // Close はストアを閉じる。
@@ -351,25 +414,34 @@ func (s *Store) SetCursor(ctx context.Context, name string, t time.Time) error {
 	return nil
 }
 
-// OpenStateInterval は cutoff の時点でまだ切断を観測していない接続区間。
+// OpenStateInterval は cutoff の時点でまだ確定していない区間。
 //
+// 使いみちは2つある。
+//
+// 1つ目は接続区間 (Wi-Fi・Bluetooth・充電) で、まだ切断を観測していないもの。
 // 常時つないだままの機器 (スマートウォッチや自宅の Wi-Fi) があると、
 // その区間は何日も閉じない。開始時刻までカーソルを引き戻していると
 // 永久に処理位置が進まなくなるので、開いた区間だけをここへ保存して
 // 次回へ持ち越し、カーソルは cutoff まで進める。
+//
+// 2つ目はアプリ利用やメディア再生の末尾で、結合相手が次のバッチに現れうるもの。
+// こちらは終了時刻を観測済みなので End に入れる。次のバッチで結合相手が
+// 現れなければ、そのまま確定して書き出す。
 type OpenStateInterval struct {
-	Device   Device
-	Source   string
-	Key      string
-	Title    string
-	Start    time.Time
+	Device Device
+	Source string
+	Key    string
+	Title  string
+	Start  time.Time
+	// End は観測済みの終了時刻。まだ終わりを観測していない接続区間では nil。
+	End      *time.Time
 	EventIDs []string
 }
 
 // LoadOpenStates は持ち越した開区間を読む。
 func (s *Store) LoadOpenStates(ctx context.Context) ([]OpenStateInterval, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT device, source, state_key, title, start_time, event_ids
+		`SELECT device, source, state_key, title, start_time, end_time, event_ids
 		 FROM open_state_interval ORDER BY device, source, state_key`)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load open state intervals: %w", err)
@@ -381,14 +453,22 @@ func (s *Store) LoadOpenStates(ctx context.Context) ([]OpenStateInterval, error)
 		var (
 			open     OpenStateInterval
 			start    string
+			end      sql.NullString
 			eventIDs string
 		)
-		if err := rows.Scan(&open.Device, &open.Source, &open.Key, &open.Title, &start, &eventIDs); err != nil {
+		if err := rows.Scan(&open.Device, &open.Source, &open.Key, &open.Title, &start, &end, &eventIDs); err != nil {
 			return nil, fmt.Errorf("failed to scan open state interval: %w", err)
 		}
 		open.Start, err = ParseTime(start)
 		if err != nil {
 			return nil, fmt.Errorf("open state interval %s/%s: %w", open.Source, open.Key, err)
+		}
+		if end.Valid {
+			endTime, err := ParseTime(end.String)
+			if err != nil {
+				return nil, fmt.Errorf("open state interval %s/%s end_time: %w", open.Source, open.Key, err)
+			}
+			open.End = &endTime
 		}
 		if err := json.Unmarshal([]byte(eventIDs), &open.EventIDs); err != nil {
 			return nil, fmt.Errorf("open state interval %s/%s event_ids: %w", open.Source, open.Key, err)
@@ -416,12 +496,81 @@ func (s *Store) SaveOpenStates(ctx context.Context, opens []OpenStateInterval) e
 		if err != nil {
 			return fmt.Errorf("failed to encode event_ids: %w", err)
 		}
+		var end any
+		if open.End != nil {
+			end = storageTime(*open.End)
+		}
 		_, err = tx.ExecContext(ctx,
-			`INSERT INTO open_state_interval (device, source, state_key, title, start_time, event_ids)
-			 VALUES (?, ?, ?, ?, ?, ?)`,
-			open.Device, open.Source, open.Key, open.Title, storageTime(open.Start), string(eventIDs))
+			`INSERT INTO open_state_interval (device, source, state_key, title, start_time, end_time, event_ids)
+			 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			open.Device, open.Source, open.Key, open.Title, storageTime(open.Start), end, string(eventIDs))
 		if err != nil {
 			return fmt.Errorf("failed to save open state interval %s/%s: %w", open.Source, open.Key, err)
+		}
+	}
+	return tx.Commit()
+}
+
+// NotificationSeen は通知の重複排除に使う「直近に記録した内容」1件。
+//
+// 同じ内容の再通知を1件にまとめる判定は、取り込み1回のなかだけで完結しない。
+// 取り込みを何分おきに走らせても結果が変わらないよう、直近の記録時刻をここへ残す。
+type NotificationSeen struct {
+	Device      Device
+	ContentHash string
+	LastAt      time.Time
+}
+
+// LoadNotificationSeen は持ち越した通知の記録時刻を読む。
+func (s *Store) LoadNotificationSeen(ctx context.Context) ([]NotificationSeen, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT device, content_hash, last_at FROM notification_seen ORDER BY device, content_hash`)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load notification seen: %w", err)
+	}
+	defer rows.Close()
+
+	var seen []NotificationSeen
+	for rows.Next() {
+		var (
+			item   NotificationSeen
+			lastAt string
+		)
+		if err := rows.Scan(&item.Device, &item.ContentHash, &lastAt); err != nil {
+			return nil, fmt.Errorf("failed to scan notification seen: %w", err)
+		}
+		item.LastAt, err = ParseTime(lastAt)
+		if err != nil {
+			return nil, fmt.Errorf("notification seen %s/%s: %w", item.Device, item.ContentHash, err)
+		}
+		seen = append(seen, item)
+	}
+	return seen, rows.Err()
+}
+
+// SaveNotificationSeen は通知の記録時刻を保存する。以前の内容は入れ替える。
+//
+// expireBefore より古い行は捨てる。重複判定の窓を過ぎた内容はもう使わないので、
+// これを渡さないと表が増え続ける。
+func (s *Store) SaveNotificationSeen(ctx context.Context, seen []NotificationSeen, expireBefore time.Time) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to begin tx for notification seen: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.ExecContext(ctx, `DELETE FROM notification_seen`); err != nil {
+		return fmt.Errorf("failed to clear notification seen: %w", err)
+	}
+	for _, item := range seen {
+		if item.LastAt.Before(expireBefore) {
+			continue
+		}
+		_, err := tx.ExecContext(ctx,
+			`INSERT INTO notification_seen (device, content_hash, last_at) VALUES (?, ?, ?)`,
+			item.Device, item.ContentHash, storageTime(item.LastAt))
+		if err != nil {
+			return fmt.Errorf("failed to save notification seen %s/%s: %w", item.Device, item.ContentHash, err)
 		}
 	}
 	return tx.Commit()

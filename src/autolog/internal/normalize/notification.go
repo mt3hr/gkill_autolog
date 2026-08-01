@@ -1,7 +1,11 @@
 package normalize
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"slices"
 	"strings"
+	"time"
 
 	"github.com/mt3hr/gkill_autolog/src/autolog/internal/rawlog"
 )
@@ -10,13 +14,18 @@ import (
 //
 // ルール（要件 §13）:
 //   - 常駐通知は除外する
+//   - 除外リストに当たるアプリの通知は除外する
 //   - タイトルと本文が両方空なら除外する
 //   - 同一通知IDの更新は最終状態だけを記録する
 //   - 同じ内容が短時間に再通知された場合は1件にまとめる
 //   - RelatedTime は最初の通知時刻
 //
 // 本文は Android に表示された内容だけを使う。補完はしない。
-func notifications(device rawlog.Device, events []*rawlog.Event) ([]Proposal, error) {
+//
+// 内容の重複排除は取り込み1回のなかだけでは完結しない。
+// 前回までに記録した内容と時刻を carried で受け取り、今回の分を足して返す。
+// これがないと、取り込みを短い間隔で走らせたときに窓の切れ目で重複がすり抜ける。
+func notifications(device rawlog.Device, events []*rawlog.Event, opts Options, carried []rawlog.NotificationSeen) ([]Proposal, []rawlog.NotificationSeen, error) {
 	type pending struct {
 		firstAt  int
 		payload  rawlog.NotificationPayload
@@ -33,10 +42,16 @@ func notifications(device rawlog.Device, events []*rawlog.Event) ([]Proposal, er
 	for index, event := range filterType(events, rawlog.EventNotification) {
 		payload, err := rawlog.DecodePayload[rawlog.NotificationPayload](event)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 
 		if payload.Ongoing {
+			continue
+		}
+		// パッケージ名とアプリ名の両方を見る。
+		// 収集元によってはパッケージ名が取れないことがあるため。
+		if opts.NotificationDenyList.Matches(payload.PackageName) ||
+			opts.NotificationDenyList.Matches(payload.AppLabel) {
 			continue
 		}
 		if strings.TrimSpace(payload.Title) == "" && strings.TrimSpace(payload.Body) == "" {
@@ -64,7 +79,14 @@ func notifications(device rawlog.Device, events []*rawlog.Event) ([]Proposal, er
 	}
 
 	// 同内容の短時間の再通知をまとめる。
-	seen := map[string]int{}
+	// 前回までに記録した時刻を引き継ぐので、窓の切れ目をまたいでも効く。
+	seen := map[string]time.Time{}
+	for _, item := range carried {
+		if item.Device != device {
+			continue
+		}
+		seen[item.ContentHash] = item.LastAt
+	}
 	notificationEvents := filterType(events, rawlog.EventNotification)
 
 	for _, key := range order {
@@ -75,14 +97,16 @@ func notifications(device rawlog.Device, events []*rawlog.Event) ([]Proposal, er
 		}
 
 		startTime := notificationEvents[item.firstAt].StartTime
+		hash := contentHash(content)
 
-		if previousIndex, ok := seen[content]; ok {
-			previous := notificationEvents[previousIndex].StartTime
+		if previous, ok := seen[hash]; ok {
 			if startTime.Sub(previous) <= NotificationDedupeWindow {
 				continue
 			}
 		}
-		seen[content] = item.firstAt
+		// 記録したものだけを次の判定の起点にする。
+		// 捨てたものを起点にすると、鳴り続ける通知が永久に記録されなくなる。
+		seen[hash] = startTime
 
 		results = append(results, Proposal{
 			ID:             makeID(KindKmemo, SourceNotification, item.eventIDs),
@@ -94,7 +118,29 @@ func notifications(device rawlog.Device, events []*rawlog.Event) ([]Proposal, er
 			RelatedTime:    timePtr(startTime),
 		})
 	}
-	return results, nil
+
+	// map の反復順は不定なので、並べてから返して結果を安定させる。
+	hashes := make([]string, 0, len(seen))
+	for hash := range seen {
+		hashes = append(hashes, hash)
+	}
+	slices.Sort(hashes)
+
+	stillSeen := make([]rawlog.NotificationSeen, 0, len(hashes))
+	for _, hash := range hashes {
+		stillSeen = append(stillSeen, rawlog.NotificationSeen{
+			Device:      device,
+			ContentHash: hash,
+			LastAt:      seen[hash],
+		})
+	}
+	return results, stillSeen, nil
+}
+
+// contentHash は Kmemo 本文の識別子を返す。
+func contentHash(content string) string {
+	sum := sha256.Sum256([]byte(content))
+	return hex.EncodeToString(sum[:])
 }
 
 // notificationContent は Kmemo の本文を組み立てる。

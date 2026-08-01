@@ -93,19 +93,32 @@ func newImportCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			notificationDenyList, notificationDenyPath, err := loadNotificationDenyList(cfg)
+			if err != nil {
+				return err
+			}
 
-			// 前回から開いたままの接続区間を持ち越す。
-			// これが無いと、開始イベントが窓の外に出た時点で区間を作れなくなる。
+			// 前回から持ち越した区間を渡す。
+			// これが無いと、開始イベントが窓の外に出た時点で接続区間を作れなくなり、
+			// アプリ利用やメディア再生は窓の切れ目で細切れになる。
 			openStates, err := store.LoadOpenStates(ctx)
+			if err != nil {
+				return err
+			}
+			// 前回までに記録した通知の内容を渡す。
+			// これが無いと、窓の切れ目をまたいだ同内容の再通知がすり抜ける。
+			notificationSeen, err := store.LoadNotificationSeen(ctx)
 			if err != nil {
 				return err
 			}
 
 			result, err := normalize.Run(events, normalize.Options{
-				Cutoff:     cutoff,
-				DenyList:   denyList,
-				OpenStates: openStates,
-				UsageTitle: cfg.UsageTitle,
+				Cutoff:               cutoff,
+				DenyList:             denyList,
+				NotificationDenyList: notificationDenyList,
+				OpenStates:           openStates,
+				NotificationSeen:     notificationSeen,
+				UsageTitle:           cfg.UsageTitle,
 			})
 			if err != nil {
 				return err
@@ -113,7 +126,9 @@ func newImportCmd() *cobra.Command {
 
 			fmt.Fprintf(out, "対象期間: %s 〜 %s\n", rawlog.FormatTime(from), rawlog.FormatTime(cutoff))
 			fmt.Fprintf(out, "生ログ:   %d 件\n", len(events))
-			fmt.Fprintf(out, "提案:     %d 件 (除外パターン %d 個: %s)\n", len(result.Proposals), denyList.Len(), denyPath)
+			fmt.Fprintf(out, "提案:     %d 件\n", len(result.Proposals))
+			fmt.Fprintf(out, "  URL の除外パターン:  %d 個 (%s)\n", denyList.Len(), denyPath)
+			fmt.Fprintf(out, "  通知の除外パターン:  %d 個 (%s)\n", notificationDenyList.Len(), notificationDenyPath)
 			fmt.Fprintln(out)
 
 			// 中身を確かめたいときのために、提案をそのまま書き出せるようにしておく。
@@ -155,10 +170,15 @@ func newImportCmd() *cobra.Command {
 				return nil
 			}
 
-			// まだ閉じていない接続区間を次回へ渡す。
+			// まだ確定していない区間を次回へ渡す。
 			// カーソルの更新より先に保存する。ここで落ちても、次回は
 			// 同じ範囲を読み直すだけで区間を失わない。
 			if err := store.SaveOpenStates(ctx, result.OpenStates); err != nil {
+				return err
+			}
+			// 通知の重複判定に使う記録も次回へ渡す。
+			// 判定の窓を過ぎたものは捨てる。残しても使わないので溜める意味がない。
+			if err := store.SaveNotificationSeen(ctx, result.NotificationSeen, cutoff.Add(-normalize.NotificationDedupeWindow)); err != nil {
 				return err
 			}
 
