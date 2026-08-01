@@ -789,9 +789,10 @@ func TestAppUsageMinimumDuration(t *testing.T) {
 		duration time.Duration
 		want     int
 	}{
-		// アプリが30秒以上利用された場合だけ記録（要件 §11.2）。
-		{name: "29秒は除外", duration: 29 * sec, want: 0},
-		{name: "30秒ちょうどは記録", duration: 30 * sec, want: 1},
+		// アプリが MinAppUsage 以上利用された場合だけ記録（要件 §11.2）。
+		// 下限は PC 側の MinWindowDuration と同じ1分。
+		{name: "59秒は除外", duration: 59 * sec, want: 0},
+		{name: "1分ちょうどは記録", duration: 60 * sec, want: 1},
 	}
 
 	for _, tt := range tests {
