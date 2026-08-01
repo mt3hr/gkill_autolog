@@ -20,16 +20,29 @@ const proposalsFileName = "proposals.jsonl"
 // denyListFileName は URLog にしない URL のパターンを書くファイル。
 const denyListFileName = "url_denylist.txt"
 
-// loadDenyList は除外リストを読む。無ければ既定の内容で作る。
+// notificationDenyListFileName は Kmemo にしない通知のパターンを書くファイル。
+const notificationDenyListFileName = "notification_denylist.txt"
+
+// loadDenyList は URL の除外リストを読む。無ければ既定の内容で作る。
 func loadDenyList(cfg *config.Config) (*normalize.DenyList, string, error) {
-	path := filepath.Join(cfg.Home, denyListFileName)
+	return loadDenyListFile(cfg, denyListFileName, normalize.DefaultDenyList)
+}
+
+// loadNotificationDenyList は通知の除外リストを読む。無ければ既定の内容で作る。
+func loadNotificationDenyList(cfg *config.Config) (*normalize.DenyList, string, error) {
+	return loadDenyListFile(cfg, notificationDenyListFileName, normalize.DefaultNotificationDenyList)
+}
+
+// loadDenyListFile は除外リストを読む。無ければ既定の内容で作る。
+func loadDenyListFile(cfg *config.Config, fileName string, defaultContent string) (*normalize.DenyList, string, error) {
+	path := filepath.Join(cfg.Home, fileName)
 
 	content, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
-		if err := os.WriteFile(path, []byte(normalize.DefaultDenyList), 0o644); err != nil {
+		if err := os.WriteFile(path, []byte(defaultContent), 0o644); err != nil {
 			return nil, path, fmt.Errorf("failed to create %s: %w", path, err)
 		}
-		content = []byte(normalize.DefaultDenyList)
+		content = []byte(defaultContent)
 	} else if err != nil {
 		return nil, path, fmt.Errorf("failed to read %s: %w", path, err)
 	}

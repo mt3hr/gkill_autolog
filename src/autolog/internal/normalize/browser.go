@@ -137,27 +137,40 @@ func browserViews(device rawlog.Device, events []*rawlog.Event, denyList *DenyLi
 
 // mediaPlays は media_play イベントを Kyou へ変換する。
 //
-// 実再生時間が MinPlayedSeconds 以上のものだけを残す。
 // 一時停止時間と広告再生時間は収集側で既に除いてある。
-// 同じ動画や楽曲でも再生の都度1件作り、RelatedTime は再生開始時刻にする（要件 §8.1）。
 //
 // URL が確定できたかどうかで作る Kyou の種類が変わる。
 //   - 確定できた: URLog。Chrome 拡張はページの URL を読めるので常にこちら
 //   - 確定できない: TimeIs。Android の MediaSession はタイトルしか返さないことが多い
 //
+// どちらも実再生時間が MinPlayedSeconds 以上のものだけを残す（要件 §8.1）。
+// URLog は同じ動画や楽曲でも再生の都度1件作り、RelatedTime は再生開始時刻にする。
+//
+// TimeIs は同じタイトルの再生が WindowMergeWindow 以内に続いていれば1本にまとめる。
+// Android の MediaSession は曲を止めずに聴いていても区間を細かく切って返すため、
+// まとめないと同じ曲の TimeIs が並ぶ。
+//
 // 検索URLや推測したURLは作らない（要件 §8.2）。TimeIs にはタイトル・アーティストという
 // 観測できた事実だけを載せ、URL の代わりを埋め合わせることはしない。
 //
 // Claude の判定は通さない（残す条件が要件で決まっているため）。
-func mediaPlays(device rawlog.Device, events []*rawlog.Event) ([]Proposal, error) {
-	var proposals []Proposal
+//
+// 2つ目の戻り値は次回へ持ち越す末尾の区間。
+func mediaPlays(device rawlog.Device, events []*rawlog.Event, opts Options, carried []rawlog.OpenStateInterval) ([]Proposal, []rawlog.OpenStateInterval, error) {
+	var (
+		proposals []Proposal
+		intervals []timedInterval
+	)
 
 	for _, event := range filterType(events, rawlog.EventMediaPlay) {
 		payload, err := rawlog.DecodePayload[rawlog.MediaPlayPayload](event)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 
+		// 判定は実再生時間で行う（要件 §8.1）。
+		// 区間の長さでは代用できない。一時停止を挟むと壁時計は伸びるが、
+		// 実際に再生したのは数秒ということがある。
 		if payload.PlayedSeconds < MinPlayedSeconds {
 			continue
 		}
@@ -184,18 +197,30 @@ func mediaPlays(device rawlog.Device, events []*rawlog.Event) ([]Proposal, error
 			continue
 		}
 
+		intervals = append(intervals, timedInterval{
+			key:      title,
+			title:    title,
+			start:    event.StartTime,
+			end:      mediaEndTime(event, payload),
+			eventIDs: []string{event.EventID},
+		})
+	}
+
+	merged, pending := mergeIntervals(device, SourceMedia, intervals, carried, WindowMergeWindow, opts.Cutoff)
+
+	for _, interval := range merged {
 		proposals = append(proposals, Proposal{
-			ID:             makeID(KindTimeIs, SourceMedia, []string{event.EventID}),
+			ID:             makeID(KindTimeIs, SourceMedia, interval.eventIDs),
 			Kind:           KindTimeIs,
 			Device:         device,
 			Source:         SourceMedia,
-			SourceEventIDs: []string{event.EventID},
-			Title:          title,
-			StartTime:      timePtr(event.StartTime),
-			EndTime:        timePtr(mediaEndTime(event, payload)),
+			SourceEventIDs: interval.eventIDs,
+			Title:          interval.title,
+			StartTime:      timePtr(interval.start),
+			EndTime:        timePtr(interval.end),
 		})
 	}
-	return proposals, nil
+	return proposals, pending, nil
 }
 
 // mediaEndTime は再生の終了時刻を返す。
@@ -225,11 +250,18 @@ func mediaTitle(payload rawlog.MediaPlayPayload) string {
 
 // appUsages は Android の app_usage イベントを TimeIs へ変換する。
 //
-// MinAppUsage 以上使われたものだけを記録する。
+// 同じアプリの利用が WindowMergeWindow 以内に再開したら1本にまとめる。
+// UsageStatsManager は画面遷移のたびに区間を切るので、まとめないと
+// 同じアプリを使い続けただけで数十秒の TimeIs が延々と並ぶ。
+// PC 側の windowSessions が割り込みを結合しているのと同じ考え方。
+//
+// MinAppUsage 以上使われたものだけを記録する。長さの判定は結合を済ませたあとに行う。
+// 短い断片どうしが結合して下限を超えることがあるため。
+//
 // gkill へは表示上のアプリ名だけを出し、パッケージ名は出さない（要件 §11.2）。
-func appUsages(device rawlog.Device, events []*rawlog.Event) ([]Proposal, error) {
-	var proposals []Proposal
-
+//
+// 2つ目の戻り値は次回へ持ち越す末尾の区間。
+func appUsages(device rawlog.Device, events []*rawlog.Event, opts Options, carried []rawlog.OpenStateInterval) ([]Proposal, []rawlog.OpenStateInterval, error) {
 	// 同じアプリの同じ区間が複数回届くことがある。
 	// UsageStatsManager は前面のままのアプリがあると読み出し位置が戻るため、
 	// 収集側が同じ区間を再送しうる。収集側でも決定的な event_id で防いでいるが、
@@ -241,16 +273,14 @@ func appUsages(device rawlog.Device, events []*rawlog.Event) ([]Proposal, error)
 	}
 	seen := map[usageKey]struct{}{}
 
+	var intervals []timedInterval
 	for _, event := range filterType(events, rawlog.EventAppUsage) {
 		payload, err := rawlog.DecodePayload[rawlog.AppUsagePayload](event)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 
 		if event.EndTime == nil || payload.AppLabel == "" {
-			continue
-		}
-		if event.EndTime.Sub(event.StartTime) < MinAppUsage {
 			continue
 		}
 
@@ -264,16 +294,32 @@ func appUsages(device rawlog.Device, events []*rawlog.Event) ([]Proposal, error)
 		}
 		seen[key] = struct{}{}
 
+		intervals = append(intervals, timedInterval{
+			key:      payload.AppLabel,
+			title:    payload.AppLabel,
+			start:    event.StartTime,
+			end:      *event.EndTime,
+			eventIDs: []string{event.EventID},
+		})
+	}
+
+	merged, pending := mergeIntervals(device, SourceWindow, intervals, carried, WindowMergeWindow, opts.Cutoff)
+
+	proposals := make([]Proposal, 0, len(merged))
+	for _, interval := range merged {
+		if interval.duration() < MinAppUsage {
+			continue
+		}
 		proposals = append(proposals, Proposal{
-			ID:             makeID(KindTimeIs, SourceWindow, []string{event.EventID}),
+			ID:             makeID(KindTimeIs, SourceWindow, interval.eventIDs),
 			Kind:           KindTimeIs,
 			Device:         device,
 			Source:         SourceWindow,
-			SourceEventIDs: []string{event.EventID},
-			Title:          payload.AppLabel,
-			StartTime:      timePtr(event.StartTime),
-			EndTime:        timePtr(*event.EndTime),
+			SourceEventIDs: interval.eventIDs,
+			Title:          interval.title,
+			StartTime:      timePtr(interval.start),
+			EndTime:        timePtr(interval.end),
 		})
 	}
-	return proposals, nil
+	return proposals, pending, nil
 }

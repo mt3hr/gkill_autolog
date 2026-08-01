@@ -116,9 +116,16 @@ type Options struct {
 	Cutoff time.Time
 	// DenyList は URLog にしない URL のパターン。nil なら除外しない。
 	DenyList *DenyList
-	// OpenStates は前回までに開いたまま持ち越された接続区間。
-	// これを渡すと、開始イベントが今回の窓の外にあっても区間を閉じられる。
+	// NotificationDenyList は Kmemo にしない通知のパターン。nil なら除外しない。
+	// パッケージ名とアプリ名の両方を照合する。
+	NotificationDenyList *DenyList
+	// OpenStates は前回までに持ち越された区間。
+	// 接続区間なら、開始イベントが今回の窓の外にあっても閉じられるようになる。
+	// アプリ利用やメディア再生の末尾なら、今回のバッチの先頭と結合できるようになる。
 	OpenStates []rawlog.OpenStateInterval
+	// NotificationSeen は前回までに記録した通知の内容と時刻。
+	// これを渡すと、窓の切れ目をまたいでも同内容の再通知をまとめられる。
+	NotificationSeen []rawlog.NotificationSeen
 	// UsageTitle は端末利用 TimeIs のタイトル。空なら DefaultUsageTitle。
 	//
 	// 端末ごとに呼び分けたい語（「Windows利用」など）は環境によって違うので、
@@ -141,9 +148,12 @@ type Result struct {
 	// URLCandidates は Claude の判定を待つ URLog 候補。
 	// 対応する Proposal は Proposals にも入っており、判定で捨てられたものだけ書き込まない。
 	URLCandidates []URLCandidate
-	// OpenStates は Cutoff 時点でまだ閉じていない接続区間。
+	// OpenStates は Cutoff 時点でまだ確定していない区間。
 	// 呼び出し側が保存し、次回の Options.OpenStates として渡す。
 	OpenStates []rawlog.OpenStateInterval
+	// NotificationSeen は Cutoff 時点で覚えておくべき通知の内容と時刻。
+	// 呼び出し側が保存し、次回の Options.NotificationSeen として渡す。
+	NotificationSeen []rawlog.NotificationSeen
 	// SafeCursor は次回の開始位置。
 	// 継続中のセッションの開始時刻より先へは進めないため、Cutoff より前になることがある。
 	SafeCursor time.Time
@@ -161,6 +171,20 @@ func Run(events []*rawlog.Event, opts Options) (*Result, error) {
 			continue
 		}
 		byDevice[e.Device] = append(byDevice[e.Device], e)
+	}
+
+	// 持ち越しがある端末は、今回イベントが1件も無くても処理する。
+	// 処理しないと、確定させてよくなった区間がいつまでも持ち越されたままになり、
+	// その端末が次に何かするまで gkill へ出てこない。
+	for _, open := range opts.OpenStates {
+		if _, ok := byDevice[open.Device]; !ok {
+			byDevice[open.Device] = nil
+		}
+	}
+	for _, seen := range opts.NotificationSeen {
+		if _, ok := byDevice[seen.Device]; !ok {
+			byDevice[seen.Device] = nil
+		}
 	}
 
 	devices := make([]rawlog.Device, 0, len(byDevice))
@@ -193,33 +217,38 @@ func Run(events []*rawlog.Event, opts Options) (*Result, error) {
 		result.Proposals = append(result.Proposals, browserProposals...)
 		result.URLCandidates = append(result.URLCandidates, candidates...)
 
-		mediaProposals, err := mediaPlays(device, deviceEvents)
+		// 再生とアプリ利用の末尾は、次のバッチの先頭と結合されるかもしれない。
+		// カーソルは引き戻さず、末尾の区間だけを Result で持ち越して次回にまとめる。
+		mediaProposals, mediaPending, err := mediaPlays(device, deviceEvents, opts, opts.OpenStates)
 		if err != nil {
 			return nil, err
 		}
 		result.Proposals = append(result.Proposals, mediaProposals...)
+		result.OpenStates = append(result.OpenStates, mediaPending...)
 
-		appProposals, err := appUsages(device, deviceEvents)
+		appProposals, appPending, err := appUsages(device, deviceEvents, opts, opts.OpenStates)
 		if err != nil {
 			return nil, err
 		}
 		result.Proposals = append(result.Proposals, appProposals...)
+		result.OpenStates = append(result.OpenStates, appPending...)
 
 		// 接続区間はカーソルを引き戻さない。常時つないだままの機器
 		// (スマートウォッチや自宅の Wi-Fi) があると永久に進まなくなるため、
 		// 開いている区間は Result で持ち越して次回に閉じる。
-		stateProposals, stateOpens, err := connectionStates(device, deviceEvents, opts.OpenStates)
+		stateProposals, stateOpens, err := connectionStates(device, deviceEvents, opts, opts.OpenStates)
 		if err != nil {
 			return nil, err
 		}
 		result.Proposals = append(result.Proposals, stateProposals...)
 		result.OpenStates = append(result.OpenStates, stateOpens...)
 
-		notificationProposals, err := notifications(device, deviceEvents)
+		notificationProposals, notificationSeen, err := notifications(device, deviceEvents, opts, opts.NotificationSeen)
 		if err != nil {
 			return nil, err
 		}
 		result.Proposals = append(result.Proposals, notificationProposals...)
+		result.NotificationSeen = append(result.NotificationSeen, notificationSeen...)
 	}
 
 	slices.SortFunc(result.Proposals, func(a, b Proposal) int {

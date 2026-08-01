@@ -2,6 +2,7 @@ package normalize
 
 import (
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/mt3hr/gkill_autolog/src/autolog/internal/rawlog"
@@ -35,7 +36,7 @@ type stateInterval struct {
 //   - 充電: 30 秒以内の再開（残量・方式は記録しない）
 //
 // 返す2つ目の値は cutoff 時点でまだ閉じていない区間。呼び出し側が次回へ持ち越す。
-func connectionStates(device rawlog.Device, events []*rawlog.Event, carried []rawlog.OpenStateInterval) ([]Proposal, []rawlog.OpenStateInterval, error) {
+func connectionStates(device rawlog.Device, events []*rawlog.Event, opts Options, carried []rawlog.OpenStateInterval) ([]Proposal, []rawlog.OpenStateInterval, error) {
 	groups := []struct {
 		eventType   rawlog.EventType
 		source      string
@@ -69,9 +70,10 @@ func connectionStates(device rawlog.Device, events []*rawlog.Event, carried []ra
 				if err != nil {
 					return stateChange{}, err
 				}
+				name := bluetoothDeviceName(payload.DeviceName)
 				return stateChange{
-					key:       payload.DeviceName,
-					title:     "Bluetooth " + payload.DeviceName,
+					key:       name,
+					title:     "Bluetooth " + name,
 					connected: payload.Connected,
 					at:        e.StartTime,
 					eventID:   e.EventID,
@@ -104,7 +106,8 @@ func connectionStates(device rawlog.Device, events []*rawlog.Event, carried []ra
 		stillOpen []rawlog.OpenStateInterval
 	)
 
-	// 前回から持ち越した開区間を種別・キーで引けるようにする。
+	// 前回から持ち越した区間を種別・キーで引けるようにする。
+	// end_time が入っていれば「切断は観測したが、まだ結合幅の内側にいる」区間。
 	carriedBySource := map[string]map[string]stateInterval{}
 	for _, open := range carried {
 		if open.Device != device {
@@ -113,14 +116,18 @@ func connectionStates(device rawlog.Device, events []*rawlog.Event, carried []ra
 		if _, ok := carriedBySource[open.Source]; !ok {
 			carriedBySource[open.Source] = map[string]stateInterval{}
 		}
-		carriedBySource[open.Source][open.Key] = stateInterval{
+		interval := stateInterval{
 			key:      open.Key,
 			title:    open.Title,
 			start:    open.Start,
 			end:      open.Start,
 			eventIDs: open.EventIDs,
-			open:     true,
+			open:     open.End == nil,
 		}
+		if open.End != nil {
+			interval.end = *open.End
+		}
+		carriedBySource[open.Source][open.Key] = interval
 	}
 
 	for _, group := range groups {
@@ -137,7 +144,14 @@ func connectionStates(device rawlog.Device, events []*rawlog.Event, carried []ra
 		}
 
 		intervals := buildStateIntervals(changes, group.mergeWindow, carriedBySource[group.source])
-		for _, interval := range intervals {
+
+		// キーごとの最後の区間だけが、次のバッチの再接続と結合されうる。
+		lastByKey := map[string]int{}
+		for i, interval := range intervals {
+			lastByKey[interval.key] = i
+		}
+
+		for i, interval := range intervals {
 			if interval.open {
 				// 切断を観測していない＝継続中。
 				// カーソルは引き戻さず、区間そのものを次回へ持ち越す。
@@ -153,6 +167,25 @@ func connectionStates(device rawlog.Device, events []*rawlog.Event, carried []ra
 				})
 				continue
 			}
+
+			// 切断を観測していても、結合幅の内側で終わっているうちは確定させない。
+			// ここで書き出してしまうと、次のバッチに再接続が来ても
+			// 結合する相手がもう残っておらず、取り込む間隔によって
+			// 区間が1本にも2本にもなってしまう。
+			if lastByKey[interval.key] == i && opts.Cutoff.Sub(interval.end) <= group.mergeWindow {
+				endTime := interval.end
+				stillOpen = append(stillOpen, rawlog.OpenStateInterval{
+					Device:   device,
+					Source:   group.source,
+					Key:      interval.key,
+					Title:    interval.title,
+					Start:    interval.start,
+					End:      &endTime,
+					EventIDs: interval.eventIDs,
+				})
+				continue
+			}
+
 			proposals = append(proposals, Proposal{
 				ID:             makeID(KindTimeIs, group.source, interval.eventIDs),
 				Kind:           KindTimeIs,
@@ -167,6 +200,23 @@ func connectionStates(device rawlog.Device, events []*rawlog.Event, carried []ra
 	}
 
 	return proposals, stillOpen, nil
+}
+
+// bluetoothDeviceName は機器名から先頭の `LE_` を落とす。
+//
+// 1台のヘッドホンがクラシックと LE の両方でつながると、
+// Android は `WH-1000XM6` と `LE_WH-1000XM6` という別々の名前で通知してくる。
+// そのままだと同じ機器の TimeIs が2本並び、2台つけているように見える。
+// 接頭辞を落として同じキーにすれば、buildStateIntervals が
+// 「既に接続中」として吸収する。
+func bluetoothDeviceName(name string) string {
+	if trimmed, ok := strings.CutPrefix(name, "LE_"); ok {
+		return trimmed
+	}
+	if trimmed, ok := strings.CutPrefix(name, "le_"); ok {
+		return trimmed
+	}
+	return name
 }
 
 // buildStateIntervals は接続・切断の並びを区間へまとめ、短い切断を結合する。
@@ -201,12 +251,20 @@ func buildStateIntervals(changes []stateChange, mergeWindow time.Duration, carri
 			current *stateInterval
 			result  []stateInterval
 		)
-		// 前回から開いたままの区間があれば、それを続きとして扱う。
-		// こうすると開始イベントが今回の窓の外にあっても正しく閉じられる。
+		// 前回から持ち越した区間があれば、それを続きとして扱う。
 		if carriedInterval, ok := carried[key]; ok {
 			interval := carriedInterval
 			interval.eventIDs = slices.Clone(carriedInterval.eventIDs)
-			current = &interval
+			if interval.open {
+				// まだ開いたまま。こうすると開始イベントが
+				// 今回の窓の外にあっても正しく閉じられる。
+				current = &interval
+			} else {
+				// 切断は観測済みだが、結合幅の内側で終わっている。
+				// 確定済みの並びへ入れておくと、今回のバッチに再接続が来たときに
+				// 下の「短い切断の結合」がつなぎ直してくれる。
+				result = append(result, interval)
+			}
 		}
 
 		for _, change := range byKey[key] {
