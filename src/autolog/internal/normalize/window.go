@@ -6,13 +6,13 @@ import (
 	"github.com/mt3hr/gkill_autolog/src/autolog/internal/rawlog"
 )
 
-// windowSegment は同じウィンドウを操作し続けた1区間。
+// windowSegment は同じアプリを操作し続けた1区間。
 type windowSegment struct {
-	appName     string
-	windowTitle string
-	start       time.Time
-	end         time.Time
-	eventIDs    []string
+	// title は TimeIs のタイトルであり、区間の同一判定にも使う。
+	title    string
+	start    time.Time
+	end      time.Time
+	eventIDs []string
 }
 
 // duration は区間の長さ。
@@ -20,28 +20,37 @@ func (s windowSegment) duration() time.Duration {
 	return s.end.Sub(s.start)
 }
 
-// sameWindow は同じウィンドウかを返す。
-// アプリ名とウィンドウタイトルの両方が一致したときだけ同一とみなす。
+// sameWindow は同じアプリの区間かを返す。
+//
+// 判定はアプリ名だけで行う。ウィンドウタイトルは見ない。
+// タブやファイルを切り替えただけで区間が切れると、同じタイトルの TimeIs が
+// 延々と並び、1分未満の断片は MinWindowDuration で落ちて間に穴が空く。
 func (s windowSegment) sameWindow(other windowSegment) bool {
-	return s.appName == other.appName && s.windowTitle == other.windowTitle
+	return s.title == other.title
 }
 
-// title は TimeIs のタイトルを返す。
+// segmentTitle は区間のタイトルを決める（要件 §6.4）。
 //
-// アプリ名とウィンドウタイトルを生の値に近い状態で使う。
-// 要約や整形はしない（要件 §6.4）。
-func (s windowSegment) title() string {
+// gkill へ出すのは表示上のアプリ名だけで、ウィンドウタイトルは使わない。
+// 開いているページ名やファイル名がタイトルへ混ざらないようにするため。
+// 生ログには window_title を残してあるので、観測できた事実そのものは失われない。
+//
+// アプリ名がどうしても取れなかったときだけ、タイトルを空にしないための
+// 保険としてウィンドウタイトルを使う。
+func segmentTitle(payload rawlog.InputPayload) string {
 	switch {
-	case s.windowTitle == "":
-		return s.appName
-	case s.appName == "":
-		return s.windowTitle
+	case payload.AppDisplayName != "":
+		return payload.AppDisplayName
+	case payload.AppName != "":
+		return payload.AppName
 	default:
-		return s.windowTitle
+		return payload.WindowTitle
 	}
 }
 
-// windowSessions は input イベントをウィンドウごとの TimeIs セッションへ変換する。
+// windowSessions は input イベントをアプリごとの TimeIs セッションへ変換する。
+//
+// タイトルには表示上のアプリ名だけを載せる。Android の appUsages と同じ粒度になる。
 //
 // 返す2つ目の値は継続中セッションの開始時刻。
 // 継続中のものがなければゼロ値を返す。
@@ -68,7 +77,7 @@ func windowSessions(device rawlog.Device, events []*rawlog.Event, opts Options) 
 
 	proposals := make([]Proposal, 0, len(segments))
 	for _, segment := range segments {
-		// 一瞬触っただけのウィンドウは記録しない。
+		// 一瞬触っただけのアプリは記録しない。
 		// 結合を済ませたあとの長さで判定する。
 		if segment.duration() < MinWindowDuration {
 			continue
@@ -79,7 +88,7 @@ func windowSessions(device rawlog.Device, events []*rawlog.Event, opts Options) 
 			Device:         device,
 			Source:         SourceWindow,
 			SourceEventIDs: segment.eventIDs,
-			Title:          segment.title(),
+			Title:          segment.title,
 			StartTime:      timePtr(segment.start),
 			EndTime:        timePtr(segment.end),
 		})
@@ -90,7 +99,7 @@ func windowSessions(device rawlog.Device, events []*rawlog.Event, opts Options) 
 // buildWindowSegments は入力イベントを連続した区間へまとめる。
 //
 // 区間が切れるのは次の2つ。
-//   - ウィンドウが変わったとき
+//   - アプリが変わったとき（同じアプリのままタブやファイルが変わっても切れない）
 //   - 入力が IdleTimeout 以上途切れたとき（終了時刻はアイドル判定時刻ではなく最後の入力時刻）
 //
 // 日付をまたいでも入力が続いていれば1つの区間として扱う（要件 §6.3）。
@@ -105,11 +114,10 @@ func buildWindowSegments(inputs []*rawlog.Event) ([]windowSegment, error) {
 		}
 
 		candidate := windowSegment{
-			appName:     payload.AppName,
-			windowTitle: payload.WindowTitle,
-			start:       event.StartTime,
-			end:         event.StartTime,
-			eventIDs:    []string{event.EventID},
+			title:    segmentTitle(payload),
+			start:    event.StartTime,
+			end:      event.StartTime,
+			eventIDs: []string{event.EventID},
 		}
 
 		if current != nil &&
@@ -134,19 +142,19 @@ func buildWindowSegments(inputs []*rawlog.Event) ([]windowSegment, error) {
 
 // mergeShortInterruptions は短時間の割り込みをはさんだ前後の区間を結合する。
 //
-// ウィンドウを切り替えたあと WindowMergeWindow 以内に元のウィンドウへ戻った場合、
-// 前後を1つの TimeIs にする。あいだに挟まった割り込み側のウィンドウは TimeIs にしない。
+// アプリを切り替えたあと WindowMergeWindow 以内に元のアプリへ戻った場合、
+// 前後を1つの TimeIs にする。あいだに挟まった割り込み側のアプリは TimeIs にしない。
 //
-// 割り込みは1つとは限らない。短時間のうちに複数のウィンドウを経由して戻ることもあるため、
+// 割り込みは1つとは限らない。短時間のうちに複数のアプリを経由して戻ることもあるため、
 // 戻るまでが WindowMergeWindow 以内であれば、間に何個挟まっていても結合する。
 // 間の区間は必ずその時間内に収まっているので、いずれも「1分以内だけ操作された
-// 割り込み側ウィンドウ」にあたり、TimeIs にしない（要件 §6.3）。
+// 割り込み側のアプリ」にあたり、TimeIs にしない（要件 §6.3）。
 func mergeShortInterruptions(segments []windowSegment) []windowSegment {
 	for {
 		merged := false
 		for i := 0; i < len(segments) && !merged; i++ {
 			for j := i + 2; j < len(segments); j++ {
-				// 元のウィンドウを離れてから戻るまでの時間で判定する。
+				// 元のアプリを離れてから戻るまでの時間で判定する。
 				if segments[j].start.Sub(segments[i].end) > WindowMergeWindow {
 					break
 				}

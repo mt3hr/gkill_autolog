@@ -67,7 +67,8 @@ func TestReadOnlyAPIsDoNotFail(t *testing.T) {
 		if err != nil {
 			t.Fatalf("GetForegroundWindow: %v", err)
 		}
-		t.Logf("ok=%v app=%q title=%q pid=%d", ok, info.AppName, info.WindowTitle, info.PID)
+		t.Logf("ok=%v app=%q display=%q title=%q pid=%d",
+			ok, info.AppName, info.AppDisplayName, info.WindowTitle, info.PID)
 	})
 
 	t.Run("IsCharging", func(t *testing.T) {
