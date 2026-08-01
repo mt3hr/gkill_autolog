@@ -41,8 +41,8 @@
 ## ビルドとテスト
 
 ```powershell
-.\scripts\build.ps1          # この機械向け
-.\scripts\build_android.ps1  # Android (arm64) 向け
+npm run build                # この機械向け
+npm run build_android_arm64  # Android (arm64) 向け
 
 cd autolog
 go test ./...

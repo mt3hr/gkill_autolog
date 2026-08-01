@@ -11,8 +11,8 @@ ingest_token.txt
 *.dll
 *.so
 *.dylib
-# build_android.ps1 が出す android/arm64 バイナリ。
-# 拡張子が無いのでディレクトリごと指定する。
+# npm run build 系が出すビルド成果物。
+# android/arm64 のバイナリは拡張子が無いのでディレクトリごと指定する。
 /release/
 
 # Go のローカルワークスペース。環境ごとに違うので共有しない。

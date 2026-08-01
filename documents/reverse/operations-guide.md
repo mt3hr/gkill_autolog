@@ -79,7 +79,7 @@ AUTOLOG_SCREENSHOT_INTERVAL=15m
 ### ビルドと確認
 
 ```powershell
-.\src\scripts\build.ps1
+npm run build
 .\src\scripts\check_connection.ps1        # 書き込まない
 .\src\scripts\run_import.ps1 -DryRun -UntilNow
 ```
@@ -163,7 +163,7 @@ printf '%s' 'パスワード' | sha256sum | cut -d' ' -f1
 PC でビルドして配り、端末で取り込みます。
 
 ```powershell
-.\src\scripts\build_android.ps1
+npm run deploy_android
 ```
 
 ```sh
