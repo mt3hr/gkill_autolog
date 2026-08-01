@@ -255,9 +255,14 @@ func (p Proposal) sortTime() time.Time {
 //
 // 同じ生ログを再度 normalize しても同じ値になるので、
 // バッチが途中で失敗して再実行しても二重登録にならない。
+//
+// 同じイベントIDが2回入っていても1回として扱う。
+// カーソルの引き戻しで同じイベントを読み直すことがあり、
+// 重複を数えていると読み直しの有無で識別子が変わってしまう。
 func makeID(kind Kind, source string, eventIDs []string) string {
 	ids := slices.Clone(eventIDs)
 	slices.Sort(ids)
+	ids = slices.Compact(ids)
 
 	hash := sha256.New()
 	hash.Write([]byte(string(kind)))

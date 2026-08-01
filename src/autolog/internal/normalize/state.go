@@ -219,7 +219,18 @@ func buildStateIntervals(changes []stateChange, mergeWindow time.Duration, carri
 				// 直前の区間が短い切断で終わっていれば、そこへつなぎ直す。
 				if len(result) > 0 {
 					previous := &result[len(result)-1]
-					if change.at.Sub(previous.end) <= mergeWindow {
+					gap := change.at.Sub(previous.end)
+
+					// 直前の区間の内側にある接続は、カーソルの引き戻しで
+					// 同じイベントを読み直しただけ。新しい区間を作らない。
+					// 差を取るだけで判定すると負の差が結合幅の内側に入ってしまい、
+					// 終了が開始より前になった区間ができる。
+					if gap < 0 {
+						if !change.at.Before(previous.start) {
+							previous.eventIDs = append(previous.eventIDs, change.eventID)
+							continue
+						}
+					} else if gap <= mergeWindow {
 						previous.eventIDs = append(previous.eventIDs, change.eventID)
 						current = previous
 						current.open = true
@@ -240,6 +251,13 @@ func buildStateIntervals(changes []stateChange, mergeWindow time.Duration, carri
 
 			if current == nil {
 				// 対応する接続が無い切断。区間を作れない。
+				continue
+			}
+			if change.at.Before(current.start) {
+				// 開始より前の切断。カーソルの引き戻しで読み直しただけなので、
+				// 区間を閉じる相手にはしない。これを閉じてしまうと
+				// 終了が開始より前の区間ができる。
+				current.eventIDs = append(current.eventIDs, change.eventID)
 				continue
 			}
 			current.end = change.at
