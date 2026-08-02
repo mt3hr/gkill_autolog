@@ -56,6 +56,15 @@ class ChromeHistoryCollector(
         if (chromeForegroundRanges.isEmpty()) return
         if (!isRootAvailable()) return
 
+        if (lastVisitTime == 0L) {
+            // 初回はカーソルを「突き合わせる利用区間より前」まで戻すだけにする。
+            // 観測を始める前の古い履歴は、突き合わせる利用区間が存在しないので
+            // どのみち1件も記録できない。カーソル 0 のまま読むと、記録できる
+            // 訪問が現れるまで毎回**全履歴**をメモリへ読み込み続けてしまう。
+            lastVisitTime = epochMillisToChromeTime(now - FIRST_RUN_LOOKBACK_MS)
+            config.chromeHistoryLastVisitTime = lastVisitTime
+        }
+
         val copied = copyHistoryDatabase() ?: return
         try {
             val visits = readVisits(copied)
@@ -110,12 +119,19 @@ class ChromeHistoryCollector(
      */
     private fun copyHistoryDatabase(): File? {
         val destination = File(cacheDir, "chrome_history_copy.db")
-        val command = "cp '$HISTORY_DB_PATH' '${destination.absolutePath}' && " +
-            "chmod 666 '${destination.absolutePath}'; " +
+        // 前回の残骸を消しておく。クラッシュで deleteCopies が走らなかった場合、
+        // 古いコピーが残っていると「cp が失敗したのに exists() が真」で
+        // 古い履歴を読んでしまう。
+        deleteCopies(destination)
+        // 本体の cp が失敗したら失敗として返す。-wal / -shm は無い構成もあるので
+        // そちらの失敗だけを無視する。以前は末尾の `; true` が本体の失敗まで
+        // 飲み込んでいて、判定が exists() 頼みになっていた。
+        val command = "if cp '$HISTORY_DB_PATH' '${destination.absolutePath}' && " +
+            "chmod 666 '${destination.absolutePath}'; then " +
             "for suffix in -wal -shm; do " +
             "cp \"$HISTORY_DB_PATH\$suffix\" '${destination.absolutePath}'\$suffix 2>/dev/null && " +
             "chmod 666 '${destination.absolutePath}'\$suffix; " +
-            "done; true"
+            "done; true; else false; fi"
         return if (runAsRoot(command) && destination.exists()) destination else null
     }
 
@@ -137,11 +153,17 @@ class ChromeHistoryCollector(
             database.absolutePath, null,
             android.database.sqlite.SQLiteDatabase.OPEN_READWRITE
         ).use { db ->
+            // サブフレーム (広告 iframe 等) の自動読み込みと、Chrome が
+            // 「一覧に出さない」と印を付けた URL は閲覧ではないので除く。
+            // transition の下位バイトが遷移の種類で、3 = AUTO_SUBFRAME。
+            // 利用者がフレーム内で自分でクリックした遷移 (MANUAL_SUBFRAME) は残す。
             db.rawQuery(
                 """
                 SELECT urls.url, urls.title, visits.visit_time
                 FROM visits JOIN urls ON visits.url = urls.id
                 WHERE visits.visit_time > ?
+                  AND (visits.transition & 0xFF) != 3
+                  AND urls.hidden = 0
                 ORDER BY visits.visit_time ASC
                 """.trimIndent(),
                 arrayOf(lastVisitTime.toString())
@@ -165,6 +187,10 @@ class ChromeHistoryCollector(
     /** Chrome の時刻 (1601年起点のマイクロ秒) を UNIX ミリ秒へ直す。 */
     private fun chromeTimeToEpochMillis(chromeTime: Long): Long =
         chromeTime / 1000L - WINDOWS_EPOCH_OFFSET_MS
+
+    /** UNIX ミリ秒を Chrome の時刻 (1601年起点のマイクロ秒) へ直す。 */
+    private fun epochMillisToChromeTime(epochMillis: Long): Long =
+        (epochMillis + WINDOWS_EPOCH_OFFSET_MS) * 1000L
 
     /** event_id に入れる URL の識別子。同じ訪問を読み直しても同じ値になる。 */
     private fun urlDigest(url: String): String =
@@ -205,5 +231,11 @@ class ChromeHistoryCollector(
 
         /** root コマンドの待ち時間の上限（秒）。 */
         private const val ROOT_COMMAND_TIMEOUT_SECONDS = 15L
+
+        /**
+         * 初回にどこまで遡って読むか。
+         * 突き合わせる利用区間 (AppUsageCollector の直近の観測) を確実に覆う長さ。
+         */
+        private const val FIRST_RUN_LOOKBACK_MS = 60 * 60 * 1000L
     }
 }
