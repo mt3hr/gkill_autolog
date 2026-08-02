@@ -306,11 +306,20 @@ func (c *Client) deviceOf(device rawlog.Device) string {
 }
 
 // newMeta は Kyou 共通のメタ情報を作る。
-func (c *Client) newMeta(dataType string, device rawlog.Device) meta {
+//
+// id が空ならランダムに採番する。呼び出し側 (writer) は提案から決めた
+// 決定的な id を渡してくる。gkill の各表は ID に一意制約が無い追記型で、
+// 読み出しは UPDATE_TIME の最新版を採用するため、同じ id の再追加は
+// 「最新版で上書き」になる。書き込み成功の応答を受け取れずに再試行しても、
+// 同じ Kyou がもう1つ増えることはない。
+func (c *Client) newMeta(dataType string, device rawlog.Device, id string) meta {
+	if id == "" {
+		id = uuid.NewString()
+	}
 	now := c.now()
 	deviceName := c.deviceOf(device)
 	return meta{
-		ID:       uuid.NewString(),
+		ID:       id,
 		DataType: dataType,
 		// RepName は送っても usecase 側が書き込み用 rep 固定で無視する
 		// (usecase/timeis.go の WriteTimeIsRep など)。混乱を避けるため空にしておく。
@@ -349,6 +358,9 @@ type meta struct {
 
 // TimeIs は追加する時間区間。
 type TimeIs struct {
+	// ID は Kyou の識別子。空ならランダムに採番する。
+	// 再試行を冪等にするため、呼び出し側が決定的な値を渡すのが望ましい。
+	ID        string
 	Device    rawlog.Device
 	Title     string
 	StartTime time.Time
@@ -357,6 +369,8 @@ type TimeIs struct {
 
 // URLog は追加するブックマーク。
 type URLog struct {
+	// ID は Kyou の識別子。空ならランダムに採番する。
+	ID          string
 	Device      rawlog.Device
 	URL         string
 	Title       string
@@ -365,6 +379,8 @@ type URLog struct {
 
 // Kmemo は追加するテキスト。
 type Kmemo struct {
+	// ID は Kyou の識別子。空ならランダムに採番する。
+	ID          string
 	Device      rawlog.Device
 	Content     string
 	RelatedTime time.Time
@@ -372,6 +388,8 @@ type Kmemo struct {
 
 // Tag は追加するタグ。
 type Tag struct {
+	// ID はタグ行の識別子。空ならランダムに採番する。
+	ID     string
 	Device rawlog.Device
 	// TargetID はタグを付ける Kyou の ID。
 	TargetID string
@@ -421,7 +439,7 @@ func (c *Client) AddTimeIs(ctx context.Context, in TimeIs) (string, error) {
 
 	endTime := in.EndTime
 	payload := timeIsPayload{
-		meta:      c.newMeta("timeis", in.Device),
+		meta:      c.newMeta("timeis", in.Device, in.ID),
 		Title:     in.Title,
 		StartTime: in.StartTime,
 		EndTime:   &endTime,
@@ -452,7 +470,7 @@ func (c *Client) AddURLog(ctx context.Context, in URLog) (string, error) {
 	}
 
 	payload := urlogPayload{
-		meta:        c.newMeta("urlog", in.Device),
+		meta:        c.newMeta("urlog", in.Device, in.ID),
 		RelatedTime: in.RelatedTime,
 		URL:         in.URL,
 		Title:       in.Title,
@@ -480,7 +498,7 @@ func (c *Client) AddKmemo(ctx context.Context, in Kmemo) (string, error) {
 	}
 
 	payload := kmemoPayload{
-		meta:        c.newMeta("kmemo", in.Device),
+		meta:        c.newMeta("kmemo", in.Device, in.ID),
 		RelatedTime: in.RelatedTime,
 		Content:     in.Content,
 	}
@@ -512,7 +530,7 @@ func (c *Client) AddTag(ctx context.Context, in Tag) (string, error) {
 	}
 
 	payload := tagPayload{
-		meta:        c.newMeta("tag", in.Device),
+		meta:        c.newMeta("tag", in.Device, in.ID),
 		RelatedTime: relatedTime,
 		TargetID:    in.TargetID,
 		Tag:         in.Tag,

@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/mt3hr/gkill_autolog/src/autolog/internal/ledger"
 	"github.com/mt3hr/gkill_autolog/src/autolog/internal/normalize"
 	"github.com/mt3hr/gkill_autolog/src/autolog/internal/rawlog"
@@ -158,6 +159,7 @@ func (w *Writer) writeOne(ctx context.Context, proposal normalize.Proposal, stat
 
 	for _, tag := range tagsFor(proposal) {
 		_, err := client.AddTag(ctx, Tag{
+			ID:          tagIDFor(proposal, tag),
 			Device:      proposal.Device,
 			TargetID:    kyouID,
 			Tag:         tag,
@@ -183,6 +185,7 @@ func (w *Writer) add(ctx context.Context, client *Client, proposal normalize.Pro
 			return "", fmt.Errorf("timeis proposal %s has no interval", proposal.ID)
 		}
 		return client.AddTimeIs(ctx, TimeIs{
+			ID:        kyouIDFor(proposal),
 			Device:    proposal.Device,
 			Title:     proposal.Title,
 			StartTime: *proposal.StartTime,
@@ -195,6 +198,7 @@ func (w *Writer) add(ctx context.Context, client *Client, proposal normalize.Pro
 		}
 		w.waitForURLogRateLimit(ctx)
 		return client.AddURLog(ctx, URLog{
+			ID:          kyouIDFor(proposal),
 			Device:      proposal.Device,
 			URL:         proposal.URL,
 			Title:       proposal.Title,
@@ -206,6 +210,7 @@ func (w *Writer) add(ctx context.Context, client *Client, proposal normalize.Pro
 			return "", fmt.Errorf("kmemo proposal %s has no related time", proposal.ID)
 		}
 		return client.AddKmemo(ctx, Kmemo{
+			ID:          kyouIDFor(proposal),
 			Device:      proposal.Device,
 			Content:     proposal.Content,
 			RelatedTime: *proposal.RelatedTime,
@@ -214,6 +219,29 @@ func (w *Writer) add(ctx context.Context, client *Client, proposal normalize.Pro
 	default:
 		return "", fmt.Errorf("unknown proposal kind %q", proposal.Kind)
 	}
+}
+
+// kyouIDFor は提案から Kyou の ID を決定的に導く。
+//
+// gkill の各表は ID に一意制約が無い追記型で、読み出しは UPDATE_TIME の
+// 最新版を採用する (gkill 本体の LatestDataRepositoryAddress)。
+// 同じ id の再追加は「最新版で上書き」なので、書き込みは成功したのに
+// 応答を受け取れなかった・台帳への記録前に落ちた、という再試行でも
+// 同じ Kyou がもう1つ増えることはない。
+func kyouIDFor(proposal normalize.Proposal) string {
+	return deterministicKyouID("kyou", proposal.ID)
+}
+
+// tagIDFor は提案とタグ名からタグ行の ID を決定的に導く。
+// 再試行で同じタグが2行になるのを防ぐ。
+func tagIDFor(proposal normalize.Proposal, tag string) string {
+	return deterministicKyouID("tag:"+tag, proposal.ID)
+}
+
+// deterministicKyouID は名前ベース (SHA-1) の UUID を作る。
+// 同じ入力からは常に同じ UUID になる。
+func deterministicKyouID(kind, proposalID string) string {
+	return uuid.NewSHA1(uuid.NameSpaceOID, []byte("gkill_autolog:"+kind+":"+proposalID)).String()
 }
 
 // describeUser は dry-run の表示用に書き込み先ユーザー名を返す。

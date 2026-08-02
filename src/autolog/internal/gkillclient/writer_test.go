@@ -2,6 +2,7 @@ package gkillclient
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -9,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/mt3hr/gkill_autolog/src/autolog/internal/ledger"
 	"github.com/mt3hr/gkill_autolog/src/autolog/internal/normalize"
 	"github.com/mt3hr/gkill_autolog/src/autolog/internal/rawlog"
@@ -185,5 +187,59 @@ func TestWriteAllPartialOverlapPolicies(t *testing.T) {
 	}
 	if stats.Written != 1 || stats.Overlapped != 0 {
 		t.Errorf("通知2: written=%d overlapped=%d, want 1/0 (更新列の続きは書く)", stats.Written, stats.Overlapped)
+	}
+}
+
+// 書き込みは成功したのに台帳へ記録する前に落ちた、という再試行でも、
+// 同じ提案からは同じ Kyou ID が送られること。gkill の表は ID に一意制約の
+// 無い追記型で、読み出しは UPDATE_TIME の最新版を採用するため、
+// 同じ ID の再追加は上書きになり Kyou は増えない。
+func TestKyouIDIsDeterministicAcrossRetries(t *testing.T) {
+	var ids []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/login" {
+			writeJSON(t, w, map[string]any{"session_id": "session-1"})
+			return
+		}
+		if r.URL.Path == "/api/add_timeis" {
+			var body struct {
+				TimeIs struct {
+					ID string `json:"id"`
+				} `json:"timeis"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Errorf("リクエストを読めない: %v", err)
+			}
+			ids = append(ids, body.TimeIs.ID)
+		}
+		writeJSON(t, w, map[string]any{})
+	}))
+	t.Cleanup(server.Close)
+
+	client := newTestClient(t, server)
+	resolve := func(rawlog.Device) (*Client, error) { return client, nil }
+	proposal := timeIsProposal("p-retry", []string{"e1"})
+
+	for range 2 {
+		// 台帳を毎回新しくして「記録できないまま再試行した」状況を作る。
+		ledgerDB, err := ledger.Open(filepath.Join(t.TempDir(), "ledger.db"))
+		if err != nil {
+			t.Fatalf("ledger.Open: %v", err)
+		}
+		writer := NewWriter(resolve, ledgerDB, slog.New(slog.DiscardHandler), WriteOptions{})
+		if _, err := writer.WriteAll(context.Background(), []normalize.Proposal{proposal}, nil); err != nil {
+			t.Fatalf("WriteAll: %v", err)
+		}
+		ledgerDB.Close()
+	}
+
+	if len(ids) != 2 {
+		t.Fatalf("add_timeis の回数 = %d, want 2", len(ids))
+	}
+	if ids[0] == "" || ids[0] != ids[1] {
+		t.Errorf("Kyou ID が決定的でない: %q vs %q", ids[0], ids[1])
+	}
+	if _, err := uuid.Parse(ids[0]); err != nil {
+		t.Errorf("Kyou ID が UUID の形式でない: %q (%v)", ids[0], err)
 	}
 }
