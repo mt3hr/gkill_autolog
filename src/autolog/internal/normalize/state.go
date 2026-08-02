@@ -15,6 +15,10 @@ type stateChange struct {
 	connected bool
 	at        time.Time
 	eventID   string
+	// marker は接続そのものの変化ではなく「観測の切れ目」であることを表す。
+	// スリープ・シャットダウン・収集停止から先は接続を観測できないので、
+	// 開いている区間をこの時点で閉じる。
+	marker bool
 }
 
 // stateInterval は接続していた1区間。
@@ -101,6 +105,28 @@ func connectionStates(device rawlog.Device, events []*rawlog.Event, opts Options
 		},
 	}
 
+	// 観測の切れ目。スリープ・シャットダウン・収集停止から先は接続を観測できない。
+	// 開いている接続区間はこの時点で閉じる。閉じないと、電源が入っていない時間まで
+	// 「接続中」の区間に含まれてしまう。復帰後は収集側がつながっているものを
+	// 記録し直すので、そこから新しい区間が始まる。
+	// ロックや画面消灯は含めない。画面が消えていても接続と観測は続いている。
+	var observationEnds []stateChange
+	for _, event := range filterType(events, rawlog.EventSession) {
+		payload, err := rawlog.DecodePayload[rawlog.SessionPayload](event)
+		if err != nil {
+			return nil, nil, err
+		}
+		switch payload.Action {
+		case rawlog.SessionSuspend, rawlog.SessionShutdown, rawlog.SessionCollectorStop:
+			observationEnds = append(observationEnds, stateChange{
+				connected: false,
+				at:        event.StartTime,
+				eventID:   event.EventID,
+				marker:    true,
+			})
+		}
+	}
+
 	var (
 		proposals []Proposal
 		stillOpen []rawlog.OpenStateInterval
@@ -143,7 +169,7 @@ func connectionStates(device rawlog.Device, events []*rawlog.Event, opts Options
 			changes = append(changes, change)
 		}
 
-		intervals := buildStateIntervals(changes, group.mergeWindow, carriedBySource[group.source])
+		intervals := buildStateIntervals(changes, group.mergeWindow, carriedBySource[group.source], observationEnds)
 
 		// キーごとの最後の区間だけが、次のバッチの再接続と結合されうる。
 		lastByKey := map[string]int{}
@@ -202,10 +228,34 @@ func connectionStates(device rawlog.Device, events []*rawlog.Event, opts Options
 	return proposals, stillOpen, nil
 }
 
+// mergeChangesWithEnds はキーのイベント列へ観測の切れ目を時刻順に差し込む。
+//
+// 同時刻では実イベントを先にする。切れ目は「その時点までの観測」を閉じるもので、
+// 同時刻に観測された変化はまだ観測の内側にあるため。
+func mergeChangesWithEnds(changes []stateChange, ends []stateChange) []stateChange {
+	if len(ends) == 0 {
+		return changes
+	}
+	merged := make([]stateChange, 0, len(changes)+len(ends))
+	i, j := 0, 0
+	for i < len(changes) && j < len(ends) {
+		if !changes[i].at.After(ends[j].at) {
+			merged = append(merged, changes[i])
+			i++
+		} else {
+			merged = append(merged, ends[j])
+			j++
+		}
+	}
+	merged = append(merged, changes[i:]...)
+	merged = append(merged, ends[j:]...)
+	return merged
+}
+
 // bluetoothDeviceName は機器名から先頭の `LE_` を落とす。
 //
 // 1台のヘッドホンがクラシックと LE の両方でつながると、
-// Android は `WH-1000XM6` と `LE_WH-1000XM6` という別々の名前で通知してくる。
+// Android は `Headphones` と `LE_Headphones` という別々の名前で通知してくる。
 // そのままだと同じ機器の TimeIs が2本並び、2台つけているように見える。
 // 接頭辞を落として同じキーにすれば、buildStateIntervals が
 // 「既に接続中」として吸収する。
@@ -222,7 +272,8 @@ func bluetoothDeviceName(name string) string {
 // buildStateIntervals は接続・切断の並びを区間へまとめ、短い切断を結合する。
 //
 // 同時に複数の対象へつながっている場合は、それぞれ別の区間として扱う。
-func buildStateIntervals(changes []stateChange, mergeWindow time.Duration, carried map[string]stateInterval) []stateInterval {
+// ends は観測の切れ目で、どのキーの開区間もその時点で閉じる。
+func buildStateIntervals(changes []stateChange, mergeWindow time.Duration, carried map[string]stateInterval, ends []stateChange) []stateInterval {
 	// キーごとに独立して処理する。
 	byKey := map[string][]stateChange{}
 	var order []string
@@ -267,7 +318,7 @@ func buildStateIntervals(changes []stateChange, mergeWindow time.Duration, carri
 			}
 		}
 
-		for _, change := range byKey[key] {
+		for _, change := range mergeChangesWithEnds(byKey[key], ends) {
 			if change.connected {
 				if current != nil {
 					// 既に接続中。重複した接続通知なので無視する。
@@ -315,7 +366,10 @@ func buildStateIntervals(changes []stateChange, mergeWindow time.Duration, carri
 				// 開始より前の切断。カーソルの引き戻しで読み直しただけなので、
 				// 区間を閉じる相手にはしない。これを閉じてしまうと
 				// 終了が開始より前の区間ができる。
-				current.eventIDs = append(current.eventIDs, change.eventID)
+				// 観測の切れ目は区間の根拠でもないので、イベントIDにも足さない。
+				if !change.marker {
+					current.eventIDs = append(current.eventIDs, change.eventID)
+				}
 				continue
 			}
 			current.end = change.at

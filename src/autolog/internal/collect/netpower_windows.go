@@ -19,6 +19,13 @@ import (
 // それより十分細かければよい。
 const pollInterval = 15 * time.Second
 
+// sleepGapThreshold を超えてポーリングが空いたら、スリープをまたいだとみなす。
+//
+// 感度は高めにしてある。取りすぎても「つながっているものを接続として
+// 記録し直す」だけで、normalize が既存の開区間へ吸収するので害がない。
+// 逆に取り逃すと、suspend で閉じた区間の続きが次の接続変化まで記録されない。
+const sleepGapThreshold = 2 * pollInterval
+
 // netPowerCollector は Wi-Fi・Bluetooth・充電の接続状態の変化を記録する。
 // 状態が変わったときだけイベントを出す。
 type netPowerCollector struct {
@@ -43,11 +50,32 @@ func (c *netPowerCollector) run(ctx context.Context) error {
 		currentSSID      string
 		currentBluetooth []string
 		currentCharging  bool
+		lastPollAt       time.Time
 	)
 
 	poll := func(now time.Time) {
-		ssid := c.pollSSID()
-		bluetooth := c.pollBluetooth()
+		// ポーリングの間隔が大きく空いたのはスリープをまたいだとき。
+		// 眠っている間の状態は観測できていないので、前回との差分は取らず、
+		// いまつながっているものを接続開始として記録し直す。
+		// 眠る前の区間は normalize が suspend の時点で閉じる。
+		if initialized && !lastPollAt.IsZero() && now.Sub(lastPollAt) > sleepGapThreshold {
+			c.logger.Info("ポーリングの間隔が空いたため接続状態を取り直す",
+				"gap", now.Sub(lastPollAt).String())
+			initialized = false
+		}
+		lastPollAt = now
+
+		// 取得に失敗した回は前回の状態を維持する。
+		// 失敗を「切断」として扱うと、実際にはつながったままなのに
+		// 偽の切断・再接続イベントが生ログに残ってしまう。
+		ssid, ok := c.pollSSID()
+		if !ok {
+			ssid = currentSSID
+		}
+		bluetooth, ok := c.pollBluetooth()
+		if !ok {
+			bluetooth = currentBluetooth
+		}
 		charging, err := winapi.IsCharging()
 		if err != nil {
 			c.logger.Warn("充電状態を取得できなかった", "error", err)
@@ -110,8 +138,9 @@ func (c *netPowerCollector) run(ctx context.Context) error {
 	}
 }
 
-// pollSSID は現在の SSID を返す。取得できない場合は空文字。
-func (c *netPowerCollector) pollSSID() string {
+// pollSSID は現在の SSID を返す。
+// 2つ目の戻り値が false のときは取得に失敗しており、状態は分からない。
+func (c *netPowerCollector) pollSSID() (string, bool) {
 	ssid, ok, err := winapi.CurrentSSID()
 	switch {
 	case errors.Is(err, winapi.ErrWlanPermissionDenied):
@@ -121,26 +150,28 @@ func (c *netPowerCollector) pollSSID() string {
 				"設定 > プライバシーとセキュリティ > 位置情報 で" +
 				"「位置情報サービス」と「デスクトップ アプリが位置情報にアクセスできるようにする」を有効にすること")
 		}
-		return ""
+		return "", false
 	case err != nil:
 		c.logger.Warn("SSIDを取得できなかった", "error", err)
-		return ""
+		return "", false
 	case !ok:
-		return ""
+		// 取得はできて、つながっていないことが分かった。
+		return "", true
 	}
-	return ssid
+	return ssid, true
 }
 
 // pollBluetooth は接続中の Bluetooth 機器名を返す。
 // 比較を安定させるため名前順に並べる。
-func (c *netPowerCollector) pollBluetooth() []string {
+// 2つ目の戻り値が false のときは取得に失敗しており、状態は分からない。
+func (c *netPowerCollector) pollBluetooth() ([]string, bool) {
 	devices, err := winapi.ConnectedBluetoothDevices()
 	if err != nil {
 		c.logger.Warn("Bluetooth機器を列挙できなかった", "error", err)
-		return nil
+		return nil, false
 	}
 	slices.Sort(devices)
-	return devices
+	return devices, true
 }
 
 func (c *netPowerCollector) emitWifi(now time.Time, ssid string, connected bool) {

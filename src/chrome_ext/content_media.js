@@ -260,7 +260,9 @@
         startedAt: play.startedAt,
         endedAt: play.endedAt,
         finished,
-      });
+        // 応答が返らないことがある (Service Worker の入れ替わり時など)。
+        // 次の報告で送り直すので、拒否は握り潰してよい。
+      }).catch(() => {});
     } catch {
       // 拡張が再読み込みされた直後などは送れない。次の報告で送り直す。
     }

@@ -131,6 +131,39 @@ func TestIngestRejectsUnknownDevice(t *testing.T) {
 	}
 }
 
+// 受け付けなかった行があるファイルは消さない。
+// 消すとその行の生ログが恒久に失われる。原因を直せば取り込み直せること。
+func TestIngestKeepsFileWithSkippedLines(t *testing.T) {
+	dir := t.TempDir()
+	at := time.Now().Truncate(time.Second)
+	path := writeInboxFile(t, dir, "a.jsonl",
+		eventLine("e1", "Phone", at),
+		eventLine("e2", "Tablet", at),
+	)
+
+	store := openTestStore(t)
+	opts := Options{Dir: dir, AllowedDevices: []rawlog.Device{"Phone"}, DefaultDevice: "Phone"}
+	if _, err := Ingest(context.Background(), store, opts, quietLogger()); err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatal("受け付けなかった行があるのにファイルが消えた")
+	}
+
+	// 設定を直す（端末を許可する）と、残りが入ってファイルは消える。
+	opts.AllowedDevices = []rawlog.Device{"Phone", "Tablet"}
+	stats, err := Ingest(context.Background(), store, opts, quietLogger())
+	if err != nil {
+		t.Fatalf("Ingest(2回目): %v", err)
+	}
+	if stats.Inserted != 1 || stats.Skipped != 0 {
+		t.Errorf("stats = %+v, want Inserted=1 Skipped=0 (取り込み済みの e1 は重複で弾かれる)", stats)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Error("全行を受け付けたのにファイルが残っている")
+	}
+}
+
 // 壊れた行があっても他の行は取り込む。
 func TestIngestSkipsBrokenLines(t *testing.T) {
 	dir := t.TempDir()

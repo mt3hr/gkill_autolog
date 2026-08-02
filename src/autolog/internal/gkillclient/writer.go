@@ -82,6 +82,20 @@ func (w *Writer) WriteAll(ctx context.Context, proposals []normalize.Proposal, k
 			stats.Skipped++
 			continue
 		}
+		// 元イベントがすべて書き込み済みなら、カーソルの引き戻しで
+		// 確定済み区間を途中から読み直してできた断片。id は違っても中身は
+		// 既に書いた区間の一部なので、書き込むと二重登録になる。
+		covered, err := w.ledger.IsCovered(ctx,
+			string(proposal.Kind), proposal.Source, string(proposal.Device), proposal.SourceEventIDs)
+		if err != nil {
+			return nil, err
+		}
+		if covered {
+			stats.Skipped++
+			w.logger.Debug("書き込み済み区間の断片のため書き込まない",
+				"proposal_id", proposal.ID, "kind", proposal.Kind, "source", proposal.Source)
+			continue
+		}
 		if decision, judged := keep[proposal.ID]; judged && !decision {
 			stats.Dropped++
 			continue
@@ -137,7 +151,8 @@ func (w *Writer) writeOne(ctx context.Context, proposal normalize.Proposal, stat
 		stats.TagsAdded++
 	}
 
-	return w.ledger.Record(ctx, proposal.ID, string(proposal.Kind), kyouID)
+	return w.ledger.Record(ctx, proposal.ID,
+		string(proposal.Kind), proposal.Source, string(proposal.Device), kyouID, proposal.SourceEventIDs)
 }
 
 // add は提案の種類に応じて追加 API を呼ぶ。

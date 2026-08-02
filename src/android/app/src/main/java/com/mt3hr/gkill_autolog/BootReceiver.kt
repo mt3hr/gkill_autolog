@@ -14,12 +14,15 @@ import android.content.Intent
  *
  * 書き出し先の許可が無くても収集は始める。
  * 生ログは端末内に溜まり、許可されたあとの書き出しでまとめて渡される。
+ *
+ * 利用者が「収集を停止」していた場合は再開しない。
+ * 止めたつもりの期間のログが再起動や更新で勝手に残らないようにする。
  */
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         when (intent.action) {
             Intent.ACTION_BOOT_COMPLETED,
-            Intent.ACTION_MY_PACKAGE_REPLACED -> AutologService.start(context)
+            Intent.ACTION_MY_PACKAGE_REPLACED -> AutologService.startIfEnabled(context)
         }
     }
 }

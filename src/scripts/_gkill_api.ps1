@@ -7,6 +7,10 @@
 
 $script:GkillIsPS5 = $PSVersionTable.PSVersion.Major -lt 6
 
+# 証明書検証を省くかどうか。Enable-GkillInsecureTls を呼んだときだけ真になる。
+# 5.1 と 7 で意味が揃うようにする（以前は 7 だと設定に関係なく常に省いていた）。
+$script:GkillSkipCertCheck = $false
+
 # Get-AutologRoot はリポジトリのルートを返す。
 # スクリプトは src/scripts/ にあるので2階層上がる。
 function Get-AutologRoot([string]$ScriptRoot) {
@@ -22,6 +26,7 @@ function Get-AutologModuleDir([string]$ScriptRoot) {
 # 5.1 ではプロセス全体の設定になるため、スクリプトの実行中だけの影響で済むよう
 # 呼び出しは各スクリプトの冒頭1回にとどめる。
 function Enable-GkillInsecureTls {
+    $script:GkillSkipCertCheck = $true
     if (-not $script:GkillIsPS5) { return }
 
     # 5.1 は既定で TLS1.0 のことがあるので明示する。
@@ -61,7 +66,8 @@ function Invoke-GkillApi([string]$BaseUrl, [string]$Path, [hashtable]$Body) {
         Body        = $json
     }
     # 7 以降は引数で証明書検証を省ける。5.1 は Enable-GkillInsecureTls で対応済み。
-    if (-not $script:GkillIsPS5) { $arguments['SkipCertificateCheck'] = $true }
+    # どちらも GKILL_INSECURE を見て Enable-GkillInsecureTls を呼んだときだけ省く。
+    if (-not $script:GkillIsPS5 -and $script:GkillSkipCertCheck) { $arguments['SkipCertificateCheck'] = $true }
 
     try {
         return Invoke-RestMethod @arguments
@@ -93,6 +99,25 @@ function Get-GkillError($Response) {
     if (-not $Response) { return $null }
     if (-not $Response.errors) { return $null }
     return ($Response.errors | ForEach-Object { "$($_.error_code) $($_.error_message)" }) -join ' / '
+}
+
+# Get-GkillTargetDevices は端末別ユーザーを確認・設定する対象の端末名を返す。
+#
+# AUTOLOG_ALLOWED_DEVICES は省略できる。Go 側 (config.resolveAllowedDevices) と
+# 同じく、この端末 (AUTOLOG_DEVICE、無ければホスト名) を必ず含める。
+# ここが食い違うと、確認スクリプトが実際の書き込み先を確認しないまま
+# 「準備できています」と言ってしまう。
+function Get-GkillTargetDevices([hashtable]$Settings) {
+    $devices = @(($Settings['AUTOLOG_ALLOWED_DEVICES'] -split ',') |
+        ForEach-Object { $_.Trim() } | Where-Object { $_ })
+
+    $local = $Settings['AUTOLOG_DEVICE']
+    if (-not $local) {
+        # config.go の defaultDeviceName と同じ落とし方（_ . 空白を除く）。
+        $local = $env:COMPUTERNAME -replace '[_.\s]', ''
+    }
+    if ($local -and $devices -notcontains $local) { $devices += $local }
+    return $devices
 }
 
 # Read-GkillEnvFile は KEY=VALUE 形式の設定ファイルをハッシュテーブルで返す。

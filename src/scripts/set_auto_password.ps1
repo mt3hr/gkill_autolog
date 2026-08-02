@@ -31,9 +31,10 @@ $base = $settings['GKILL_BASE_URL']
 if (-not $base) { throw "GKILL_BASE_URL が $EnvFile にありません" }
 if ($settings['GKILL_INSECURE'] -in @('true', '1', 'yes', 'on')) { Enable-GkillInsecureTls }
 
-$devices = ($settings['AUTOLOG_ALLOWED_DEVICES'] -split ',') |
-    ForEach-Object { $_.Trim() } | Where-Object { $_ }
-if (-not $devices) { throw "AUTOLOG_ALLOWED_DEVICES が $EnvFile にありません" }
+# AUTOLOG_ALLOWED_DEVICES は省略できる（autolog.env.example・Go 側と同じ扱い）。
+# この端末 (AUTOLOG_DEVICE) は常に対象へ含める。
+$devices = Get-GkillTargetDevices $settings
+if (-not $devices) { throw "対象の端末が決まりません。AUTOLOG_DEVICE を $EnvFile に書いてください" }
 
 Write-Host "接続先: $base"
 Write-Host '確認するユーザー:'

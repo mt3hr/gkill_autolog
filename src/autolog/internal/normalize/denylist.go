@@ -95,6 +95,8 @@ googlesyndication.com
 googleadservices.com
 google-analytics.com
 /adserver/
+# 注意: utm_ 付きの URL は計測パラメータが付いただけの普通の記事のこともある。
+# 巻き込みたくなければこの行を # で消す
 utm_source=
 
 # --- 認証・中継ページ ---
@@ -106,7 +108,8 @@ login.microsoftonline.com
 # --- 検索エンジンの中継 ---
 google.com/url?
 l.facebook.com/l.php
-t.co/
+# t.co は短い名前なので部分一致にしない。tenant.co のような別ドメインまで当たる
+re:^https?://t\.co/
 
 # --- 一覧・タイムラインのトップ（何を見たかの記録として薄い）---
 x.com/home

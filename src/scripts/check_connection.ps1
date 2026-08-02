@@ -76,8 +76,13 @@ if ([string]::IsNullOrEmpty($autoPw)) {
 
 Write-Host ''
 Write-Host '=== 端末別ユーザー（取り込みの書き込み先）==='
-$devices = ($settings['AUTOLOG_ALLOWED_DEVICES'] -split ',') |
-    ForEach-Object { $_.Trim() } | Where-Object { $_ }
+# AUTOLOG_ALLOWED_DEVICES は省略できる。この端末 (AUTOLOG_DEVICE) は常に確認する。
+# 1台も確認せずに「準備できています」と言わないため、決まらなければ失敗にする。
+$devices = Get-GkillTargetDevices $settings
+if (-not $devices) {
+    Write-Host '確認する端末が決まりません。AUTOLOG_DEVICE を設定してください。'
+    exit 1
+}
 $failed = @()
 foreach ($device in $devices) {
     $autoUser = "$prefix$device"

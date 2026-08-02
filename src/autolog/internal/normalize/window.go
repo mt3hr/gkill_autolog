@@ -69,10 +69,22 @@ func windowSessions(device rawlog.Device, events []*rawlog.Event, opts Options) 
 	// 末尾のセッションがまだ続いているかを判定する。
 	// 最後の入力から IdleTimeout 経っていなければ、Cutoff 後も続いている可能性がある。
 	// 継続中のものは処理せず、終了後の次回バッチに回す（要件 §6.3）。
+	pendingFrom := len(segments)
+	if opts.Cutoff.Sub(segments[pendingFrom-1].end) < IdleTimeout {
+		pendingFrom--
+	}
+	// 続いていなくても、結合幅の内側で終わった区間はまだ確定できない。
+	// 割り込みの最中に Cutoff が来た場合、直後に元のアプリへ戻れば前後を
+	// 結合すべきで、ここで確定させると取り込む間隔しだいで1本にも2本にもなる。
+	// アプリ利用・メディア再生の持ち越し（mergeIntervals）と同じ考え方だが、
+	// 窓のセッションは生の入力から組み直すので、区間ではなくカーソルを引き戻す。
+	for pendingFrom > 0 && opts.Cutoff.Sub(segments[pendingFrom-1].end) <= WindowMergeWindow {
+		pendingFrom--
+	}
 	var pendingStart time.Time
-	if last := segments[len(segments)-1]; opts.Cutoff.Sub(last.end) < IdleTimeout {
-		pendingStart = last.start
-		segments = segments[:len(segments)-1]
+	if pendingFrom < len(segments) {
+		pendingStart = segments[pendingFrom].start
+		segments = segments[:pendingFrom]
 	}
 
 	proposals := make([]Proposal, 0, len(segments))

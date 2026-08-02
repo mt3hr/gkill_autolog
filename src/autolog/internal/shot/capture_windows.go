@@ -47,9 +47,9 @@ func Run(ctx context.Context, cfg *config.Config, logger *slog.Logger) error {
 			timer.Stop()
 			return nil
 		case now := <-timer.C:
-			// タイマーは狙った時刻より少し前に起きることがあるため、
-			// 最寄りの撮影時刻へ丸める。
-			capturedAt := RoundToTick(now, interval)
+			// 通常は狙った時刻を記録時刻にし、スリープ復帰などで
+			// 大きく遅れて起きた場合だけ実際の時刻をそのまま使う。
+			capturedAt := CaptureTime(next, now, interval)
 
 			result, err := Capture(cfg, capturedAt)
 			switch {

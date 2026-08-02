@@ -62,81 +62,36 @@ func TestNextTickAlwaysAdvances(t *testing.T) {
 	}
 }
 
-func TestRoundToTick(t *testing.T) {
+func TestCaptureTime(t *testing.T) {
 	cases := []struct {
 		name     string
+		tick     time.Time
 		now      time.Time
 		interval time.Duration
 		want     time.Time
 	}{
-		// タイマーが少し早く起きた場合。切り捨てるとひとつ前の撮影時刻に
-		// なってしまうので、近いほうの境目へ寄せる。
-		{"1時間: 59分台に起きた", at(10, 59, 59), time.Hour, at(11, 0, 0)},
-		{"1時間: 少し遅れて起きた", at(11, 0, 2), time.Hour, at(11, 0, 0)},
-		{"1時間: ちょうど半分は次へ", at(10, 30, 0), time.Hour, at(11, 0, 0)},
-		{"1時間: 半分の手前は手前へ", at(10, 29, 59), time.Hour, at(10, 0, 0)},
-		{"15分: 少し早い", at(10, 14, 58), 15 * time.Minute, at(10, 15, 0)},
-		{"15分: 少し遅い", at(10, 15, 2), 15 * time.Minute, at(10, 15, 0)},
-		{"5分: 少し早い", at(10, 9, 59), 5 * time.Minute, at(10, 10, 0)},
-		{"1分: 少し早い", at(10, 8, 59), time.Minute, at(10, 9, 0)},
+		// タイマーの起床が数秒ずれても、狙った区切りの時刻で記録する。
+		{"1時間: 少し早く起きた", at(11, 0, 0), at(10, 59, 59), time.Hour, at(11, 0, 0)},
+		{"1時間: 少し遅れて起きた", at(11, 0, 0), at(11, 0, 2), time.Hour, at(11, 0, 0)},
+		{"1時間: ちょうど", at(11, 0, 0), at(11, 0, 0), time.Hour, at(11, 0, 0)},
+		{"1時間: 許容の上限(1分)まで", at(11, 0, 0), at(11, 1, 0), time.Hour, at(11, 0, 0)},
+		// スリープ復帰などで大きく遅れたら、実際に撮れた時刻をそのまま使う。
+		// 区切りへ丸めると、撮っていない時刻の画像として記録してしまう。
+		{"1時間: 復帰で大きく遅れた", at(13, 0, 0), at(15, 47, 12), time.Hour, at(15, 47, 12)},
+		{"1時間: 1分を超えた遅れ", at(11, 0, 0), at(11, 1, 1), time.Hour, at(11, 1, 1)},
+		// 短い間隔では許容も間隔の半分に縮む。
+		{"10秒: 3秒の遅れは丸める", at(10, 0, 10), at(10, 0, 13), 10 * time.Second, at(10, 0, 10)},
+		{"10秒: 6秒の遅れは実時刻", at(10, 0, 10), at(10, 0, 16), 10 * time.Second, at(10, 0, 16)},
 	}
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := RoundToTick(c.now, c.interval)
+			got := CaptureTime(c.tick, c.now, c.interval)
 			if !got.Equal(c.want) {
-				t.Errorf("RoundToTick(%s, %s) = %s, want %s",
-					c.now.Format(time.RFC3339), c.interval, got.Format(time.RFC3339), c.want.Format(time.RFC3339))
+				t.Errorf("CaptureTime(%s, %s, %s) = %s, want %s",
+					c.tick.Format(time.RFC3339), c.now.Format(time.RFC3339), c.interval,
+					got.Format(time.RFC3339), c.want.Format(time.RFC3339))
 			}
 		})
-	}
-}
-
-// TestRoundToTickMatchesOldHourlyBehaviour は、毎時00分の固定だったころの
-// 丸め（切り捨てたうえで30分以上過ぎていたら1時間足す）と
-// 1時間間隔での結果が変わらないことを確かめる。
-//
-// ちょうど半分の時刻（毎時30分00秒）だけは扱いが違う。
-// 旧実装は「30分より後」で判定していたので手前の正時に、
-// RoundToTick は次の正時に丸める。撮影はタイマーが境目の近くで起きたときに
-// 行うもので、ちょうど半分の時刻に丸めが走ることはないため、
-// どちらでも記録は変わらない。ここでは境界として明示的に除く。
-func TestRoundToTickMatchesOldHourlyBehaviour(t *testing.T) {
-	oldBehaviour := func(now time.Time) time.Time {
-		capturedAt := now.Truncate(time.Hour)
-		if now.Sub(capturedAt) > 30*time.Minute {
-			capturedAt = capturedAt.Add(time.Hour)
-		}
-		return capturedAt
-	}
-
-	now := at(10, 0, 0)
-	for range 24 * 60 {
-		now = now.Add(time.Minute)
-		if now.Sub(now.Truncate(time.Hour)) == 30*time.Minute {
-			continue
-		}
-		if got, want := RoundToTick(now, time.Hour), oldBehaviour(now); !got.Equal(want) {
-			t.Fatalf("%s: RoundToTick = %s, 旧実装 = %s",
-				now.Format(time.RFC3339), got.Format(time.RFC3339), want.Format(time.RFC3339))
-		}
-	}
-}
-
-// TestRoundToTickProducesDistinctFileNames は、1時間未満の間隔でも
-// ファイル名（秒まで）が衝突しないことを確かめる。
-// shot.Save は既存ファイルを上書きしないので、衝突すると撮り逃しになる。
-func TestRoundToTickProducesDistinctFileNames(t *testing.T) {
-	interval := 15 * time.Minute
-	seen := map[string]bool{}
-
-	now := at(0, 0, 0)
-	for range 24 * 4 {
-		stamp := RoundToTick(now, interval).Format("2006-01-02_15-04-05")
-		if seen[stamp] {
-			t.Fatalf("撮影時刻が重複した: %s", stamp)
-		}
-		seen[stamp] = true
-		now = now.Add(interval)
 	}
 }

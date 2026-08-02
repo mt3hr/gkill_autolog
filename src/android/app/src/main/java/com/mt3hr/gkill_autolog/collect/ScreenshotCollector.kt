@@ -34,7 +34,7 @@ import java.util.Locale
  * 「撮り逃した時間の画像を後から補完しない」は守られている。
  *
  * 撮った画像は共有ストレージへ置くだけ。そこから先へ運ぶのは
- * termux-tasker の dvnf.sh の役目で、AutoScreenshot_<端末>_<日付> にまとめられる。
+ * 同期スクリプト (gkill_server dvnf) の役目で、AutoScreenshot_<端末>_<日付> にまとめられる。
  */
 class ScreenshotCollector(
     private val context: Context,
@@ -125,6 +125,11 @@ class ScreenshotCollector(
             Log.w(TAG, "共有ストレージへ書けないため撮らない。全ファイルアクセスの許可が要る")
             return
         }
+        if (config.device.isBlank()) {
+            // ファイル名が <端末名>_<時刻>.webp なので、端末名が無いと後で判別できない。
+            Log.w(TAG, "端末名が決まっていないため撮らない。アプリの設定で端末名を入れること")
+            return
+        }
 
         val name = fileName(capturedAt)
         val pngPath = File(context.cacheDir, "screencap.png")
@@ -145,8 +150,13 @@ class ScreenshotCollector(
                 return
             }
             // Windows 側と同じく可逆 WebP にする。PNG より小さい。
+            //
+            // 書きかけを同期スクリプトに拾われないよう、JSONL や GPX と同じく
+            // 一時名で書いてから rename する。WebP への圧縮は時間がかかるので、
+            // 最終名へ直接書くと壊れた画像が運ばれることがある。
             val destination = File(SharedStorage.screenshotsDir, name)
-            destination.outputStream().use { out ->
+            val temporary = File(SharedStorage.screenshotsDir, "$name.tmp")
+            temporary.outputStream().use { out ->
                 @Suppress("DEPRECATION")
                 val format = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
                     Bitmap.CompressFormat.WEBP_LOSSLESS
@@ -154,13 +164,20 @@ class ScreenshotCollector(
                     Bitmap.CompressFormat.WEBP
                 }
                 bitmap.compress(format, 100, out)
+                out.fd.sync()
             }
             bitmap.recycle()
 
             // IDF は mtime を RelatedTime にする。撮影時刻に合わせておかないと
-            // 取り込んだ日時で記録されてしまう。
-            if (!destination.setLastModified(capturedAt)) {
-                Log.w(TAG, "撮影時刻を mtime に反映できなかった: ${destination.name}")
+            // 取り込んだ日時で記録されてしまう。rename より先に合わせておけば、
+            // 現れた瞬間から正しい mtime を持ち、運ばれるのと競合しない。
+            if (!temporary.setLastModified(capturedAt)) {
+                Log.w(TAG, "撮影時刻を mtime に反映できなかった: ${temporary.name}")
+            }
+            if (!temporary.renameTo(destination)) {
+                Log.w(TAG, "撮ったファイルの名前を変えられなかった: ${temporary.name}")
+                temporary.delete()
+                return
             }
 
             Log.i(TAG, "スクリーンショットを保存した: ${destination.name} (${destination.length()} bytes)")

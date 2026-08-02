@@ -70,6 +70,12 @@ class AutologService : Service() {
     /** 書き出し中かどうか。前の書き出しが終わる前に次を積まないようにする。 */
     private val exporting = AtomicBoolean(false)
 
+    /** Chrome 履歴を読んでいる最中かどうか。su が遅くても積み上げないようにする。 */
+    private val chromeCollecting = AtomicBoolean(false)
+
+    /** 直前に Chrome 履歴を読んだ時刻。 */
+    private var lastChromeCollectAt: Long = 0
+
     private lateinit var systemEvents: SystemEventCollector
     private lateinit var appUsage: AppUsageCollector
     private lateinit var media: MediaCollector
@@ -98,7 +104,7 @@ class AutologService : Service() {
         systemEvents = SystemEventCollector(applicationContext, store)
         appUsage = AppUsageCollector(applicationContext, store)
         media = MediaCollector(applicationContext, store)
-        chromeHistory = ChromeHistoryCollector(store, applicationContext.cacheDir)
+        chromeHistory = ChromeHistoryCollector(applicationContext, store)
         screenshots = ScreenshotCollector(applicationContext, Config(applicationContext))
         location = LocationCollector(applicationContext, gpsStore)
     }
@@ -163,9 +169,23 @@ class AutologService : Service() {
         appUsage.collect(now)
         media.collect(now)
 
-        if (Config(applicationContext).readChromeHistory) {
-            // 前面表示を確認できた区間だけを渡す。
-            chromeHistory.collect(appUsage.recentChromeForegroundRanges(), now)
+        // Chrome の履歴は root コマンドの実行と履歴DBのコピーを伴うので、
+        // 撮影と同じく主スレッドでは行わない。su の許可待ちで固まると ANR になる。
+        // 履歴は溜まってから読めるので、tick ごとではなく1分おきで足りる。
+        if (Config(applicationContext).readChromeHistory &&
+            now - lastChromeCollectAt >= CHROME_HISTORY_INTERVAL_MS &&
+            chromeCollecting.compareAndSet(false, true)
+        ) {
+            lastChromeCollectAt = now
+            // 前面表示を確認できた区間だけを渡す。スナップショットを取ってから渡す。
+            val ranges = appUsage.recentChromeForegroundRanges()
+            ioExecutor.execute {
+                try {
+                    chromeHistory.collect(ranges, now)
+                } finally {
+                    chromeCollecting.set(false)
+                }
+            }
         }
 
         // 撮影は root コマンドの実行を伴うので主スレッドでは行わない。
@@ -314,6 +334,14 @@ class AutologService : Service() {
         private const val TICK_INTERVAL_MS = 5_000L
 
         /**
+         * Chrome 履歴を読む間隔。
+         *
+         * su の起動と履歴DBのコピーを伴う重い処理なので tick ごとには行わない。
+         * 履歴は溜まってから読めるため、間隔を空けても取りこぼさない。
+         */
+        private const val CHROME_HISTORY_INTERVAL_MS = 60_000L
+
+        /**
          * 書き出しの間隔。
          *
          * 書き出せなかった分は端末に残って次回やり直されるので、間隔が長くても失われない。
@@ -335,12 +363,25 @@ class AutologService : Service() {
         /** 設定が変わったことをサービスへ伝える Intent の印。 */
         private const val ACTION_RELOAD_SETTINGS = "com.mt3hr.gkill_autolog.RELOAD_SETTINGS"
 
+        /** 利用者の操作で収集を始める。以後、再起動しても再開する。 */
         fun start(context: Context) {
+            Config(context).collectionEnabled = true
             val intent = Intent(context, AutologService::class.java)
             context.startForegroundService(intent)
         }
 
+        /**
+         * 収集が有効なときだけ始める。再起動・アプリ更新からの再開用。
+         * 利用者が止めたものを勝手に再開しない。
+         */
+        fun startIfEnabled(context: Context) {
+            if (!Config(context).collectionEnabled) return
+            context.startForegroundService(Intent(context, AutologService::class.java))
+        }
+
+        /** 利用者の操作で収集を止める。通知の収集と再起動後の自動開始も止まる。 */
         fun stop(context: Context) {
+            Config(context).collectionEnabled = false
             context.stopService(Intent(context, AutologService::class.java))
             ExportWorker.cancel(context)
         }

@@ -4,6 +4,7 @@ import android.app.Notification
 import android.content.pm.PackageManager
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
+import com.mt3hr.gkill_autolog.Config
 import com.mt3hr.gkill_autolog.model.Event
 import com.mt3hr.gkill_autolog.model.EventType
 import com.mt3hr.gkill_autolog.store.EventStore
@@ -16,7 +17,7 @@ import org.json.JSONObject
  * 常駐通知は除外し、タイトルと本文が両方空のものも記録しない。
  *
  * 同一通知の更新をまとめる処理と、短時間の同内容再通知の集約は
- * X1 Yoga 側の normalize が行う。ここでは届いたものをそのまま残す。
+ * 取り込み時の normalize が行う。ここでは届いたものをそのまま残す。
  *
  * このサービスは MediaSessionManager.getActiveSessions を呼ぶためにも必要。
  * 通知へのアクセスが有効なアプリだけが再生中のメディア情報を取得できる。
@@ -27,6 +28,9 @@ class NotificationCollectorService : NotificationListenerService() {
 
     override fun onNotificationPosted(sbn: StatusBarNotification?) {
         val notification = sbn ?: return
+        // このサービスはシステムにバインドされたままなので、常駐サービスを
+        // 止めても呼ばれ続ける。「収集を停止」の意図に合わせてここでも見る。
+        if (!Config(applicationContext).collectionEnabled) return
         record(notification)
     }
 

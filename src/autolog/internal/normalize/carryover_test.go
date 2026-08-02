@@ -14,19 +14,34 @@ import (
 // 実際の取り込み（cmd_import）と同じ手順を踏む。
 //   - 読む範囲は「前回の SafeCursor 〜 今回の Cutoff」
 //   - 持ち越しは Result から次回の Options へ渡す
-//
-// 台帳が提案IDで重複を落とすので、ここでもIDで重複を落とす。
-// カーソルの引き戻しで同じイベントを読み直すことがあり、
-// それ自体は正しい動きだからである。
+//   - 台帳と同じ二重の重複排除を行う。提案IDの一致に加え、
+//     元イベントがすべて書き込み済みの提案（確定済み区間の断片）も落とす
+//     （ledger.IsCovered 相当）。カーソルの引き戻しで同じイベントを
+//     読み直すことがあり、それ自体は正しい動きだからである。
 func runNormalizeSliced(t *testing.T, events []*rawlog.Event, opts Options, cutoffs []time.Duration) []Proposal {
 	t.Helper()
 
 	var (
-		from        time.Time
-		carriedOpen []rawlog.OpenStateInterval
-		carriedSeen []rawlog.NotificationSeen
-		byID        = map[string]Proposal{}
+		from          time.Time
+		carriedOpen   []rawlog.OpenStateInterval
+		carriedSeen   []rawlog.NotificationSeen
+		written       = map[string]Proposal{}
+		writtenEvents = map[string]struct{}{}
 	)
+	coverageKey := func(p Proposal, eventID string) string {
+		return string(p.Kind) + "\x00" + p.Source + "\x00" + string(p.Device) + "\x00" + eventID
+	}
+	isCovered := func(p Proposal) bool {
+		if len(p.SourceEventIDs) == 0 {
+			return false
+		}
+		for _, id := range p.SourceEventIDs {
+			if _, ok := writtenEvents[coverageKey(p, id)]; !ok {
+				return false
+			}
+		}
+		return true
+	}
 
 	for _, cutoff := range cutoffs {
 		sliceOpts := opts
@@ -47,7 +62,16 @@ func runNormalizeSliced(t *testing.T, events []*rawlog.Event, opts Options, cuto
 			t.Fatalf("Run(cutoff=%v): %v", cutoff, err)
 		}
 		for _, proposal := range result.Proposals {
-			byID[proposal.ID] = proposal
+			if _, ok := written[proposal.ID]; ok {
+				continue
+			}
+			if isCovered(proposal) {
+				continue
+			}
+			written[proposal.ID] = proposal
+			for _, id := range proposal.SourceEventIDs {
+				writtenEvents[coverageKey(proposal, id)] = struct{}{}
+			}
 		}
 
 		carriedOpen = result.OpenStates
@@ -55,8 +79,8 @@ func runNormalizeSliced(t *testing.T, events []*rawlog.Event, opts Options, cuto
 		from = result.SafeCursor
 	}
 
-	merged := make([]Proposal, 0, len(byID))
-	for _, proposal := range byID {
+	merged := make([]Proposal, 0, len(written))
+	for _, proposal := range written {
 		merged = append(merged, proposal)
 	}
 	sortProposals(merged)
@@ -135,9 +159,9 @@ func splitConsistencyEvents(t *testing.T) []*rawlog.Event {
 
 		// Bluetooth: 接続したまま切れ目をまたぐ。
 		androidEvent(t, "b1", rawlog.EventBluetooth, 5*sec, nil,
-			rawlog.BluetoothPayload{DeviceName: "WH-1000XM6", Connected: true}),
+			rawlog.BluetoothPayload{DeviceName: "Headphones", Connected: true}),
 		androidEvent(t, "b2", rawlog.EventBluetooth, 200*sec, nil,
-			rawlog.BluetoothPayload{DeviceName: "WH-1000XM6", Connected: false}),
+			rawlog.BluetoothPayload{DeviceName: "Headphones", Connected: false}),
 	}
 }
 
@@ -172,6 +196,43 @@ func TestSplitConsistency(t *testing.T) {
 			assertSameProposals(t, got, want)
 		})
 	}
+}
+
+func TestCursorRegressionDoesNotDuplicateSettledInterval(t *testing.T) {
+	// 閉じないセッションがカーソルを引き戻すと、確定済みのアプリ利用区間の
+	// イベント列が途中から読み直される。断片の event_id 集合から別 id の
+	// 提案が出ても、台帳相当の重複排除（イベント包含）で落ちること。
+	events := []*rawlog.Event{
+		// 30秒の途切れを挟んで1本に結合され、cutoff=10分で確定する。
+		androidEvent(t, "a1", rawlog.EventAppUsage, 0, durationPtr(40*sec),
+			rawlog.AppUsagePayload{AppLabel: "Chrome"}),
+		// 画面ON。閉じないのでカーソルはここで止まり続ける。
+		androidEvent(t, "s1", rawlog.EventSession, 50*sec, nil,
+			rawlog.SessionPayload{Action: rawlog.SessionUnlock}),
+		androidEvent(t, "a2", rawlog.EventAppUsage, 70*sec, durationPtr(180*sec),
+			rawlog.AppUsagePayload{AppLabel: "Chrome"}),
+	}
+
+	got := runNormalizeSliced(t, events, Options{}, []time.Duration{10 * min, 20 * min})
+	want := runNormalize(t, events, 20*min).Proposals
+	assertSameProposals(t, got, want)
+}
+
+func TestWindowInterruptionMergesAcrossBatches(t *testing.T) {
+	// 割り込みの最中に cutoff が来ても、直後に元のアプリへ戻れば
+	// 1本の TimeIs に結合されること。結合幅の内側で終わった区間を
+	// 確定させてしまうと、取り込む間隔しだいで1本にも2本にもなる。
+	events := []*rawlog.Event{
+		event(t, "i1", rawlog.EventInput, 0, nil, rawlog.InputPayload{AppName: "Code", WindowTitle: "A"}),
+		event(t, "i2", rawlog.EventInput, 70*sec, nil, rawlog.InputPayload{AppName: "Code", WindowTitle: "A"}),
+		event(t, "i3", rawlog.EventInput, 80*sec, nil, rawlog.InputPayload{AppName: "chrome", WindowTitle: "B"}),
+		event(t, "i4", rawlog.EventInput, 100*sec, nil, rawlog.InputPayload{AppName: "Code", WindowTitle: "A"}),
+		event(t, "i5", rawlog.EventInput, 170*sec, nil, rawlog.InputPayload{AppName: "Code", WindowTitle: "A"}),
+	}
+
+	got := runNormalizeSliced(t, events, Options{}, []time.Duration{90 * sec, 20 * min})
+	want := runNormalize(t, events, 20*min).Proposals
+	assertSameProposals(t, got, want)
 }
 
 func TestAppUsageMergesAcrossBatches(t *testing.T) {
@@ -448,21 +509,21 @@ func TestBluetoothLEAndClassicBecomeOneInterval(t *testing.T) {
 	// 1台のヘッドホンがクラシックと LE の両方でつながっても TimeIs は1本。
 	events := []*rawlog.Event{
 		androidEvent(t, "b1", rawlog.EventBluetooth, 0, nil,
-			rawlog.BluetoothPayload{DeviceName: "WH-1000XM6", Connected: true}),
+			rawlog.BluetoothPayload{DeviceName: "Headphones", Connected: true}),
 		androidEvent(t, "b2", rawlog.EventBluetooth, 2*sec, nil,
-			rawlog.BluetoothPayload{DeviceName: "LE_WH-1000XM6", Connected: true}),
+			rawlog.BluetoothPayload{DeviceName: "LE_Headphones", Connected: true}),
 		androidEvent(t, "b3", rawlog.EventBluetooth, 30*min, nil,
-			rawlog.BluetoothPayload{DeviceName: "LE_WH-1000XM6", Connected: false}),
+			rawlog.BluetoothPayload{DeviceName: "LE_Headphones", Connected: false}),
 		androidEvent(t, "b4", rawlog.EventBluetooth, 30*min+2*sec, nil,
-			rawlog.BluetoothPayload{DeviceName: "WH-1000XM6", Connected: false}),
+			rawlog.BluetoothPayload{DeviceName: "Headphones", Connected: false}),
 	}
 
 	states := proposalsBySource(runNormalize(t, events, 60*min), SourceBluetooth)
 	if len(states) != 1 {
 		t.Fatalf("件数 = %d, want 1 (%v)", len(states), describeProposals(states))
 	}
-	if states[0].Title != "Bluetooth WH-1000XM6" {
-		t.Errorf("タイトル = %q, want %q", states[0].Title, "Bluetooth WH-1000XM6")
+	if states[0].Title != "Bluetooth Headphones" {
+		t.Errorf("タイトル = %q, want %q", states[0].Title, "Bluetooth Headphones")
 	}
 }
 
@@ -472,11 +533,11 @@ func TestBluetoothNameWithoutLEPrefixIsKept(t *testing.T) {
 		in   string
 		want string
 	}{
-		{in: "WH-1000XM6", want: "WH-1000XM6"},
-		{in: "LE_WH-1000XM6", want: "WH-1000XM6"},
-		{in: "le_WH-1000XM6", want: "WH-1000XM6"},
+		{in: "Headphones", want: "Headphones"},
+		{in: "LE_Headphones", want: "Headphones"},
+		{in: "le_Headphones", want: "Headphones"},
 		{in: "LED Lamp", want: "LED Lamp"},
-		{in: "Keyboard LE_K370", want: "Keyboard LE_K370"},
+		{in: "Keyboard LE_Extra", want: "Keyboard LE_Extra"},
 		{in: "", want: ""},
 	}
 
@@ -496,8 +557,8 @@ func TestConnectionRereadDoesNotInvertInterval(t *testing.T) {
 	carried := []rawlog.OpenStateInterval{{
 		Device:   rawlog.Device("Phone"),
 		Source:   SourceBluetooth,
-		Key:      "M720 Triathlon",
-		Title:    "Bluetooth M720 Triathlon",
+		Key:      "Mouse",
+		Title:    "Bluetooth Mouse",
 		Start:    base().Add(10 * min),
 		EventIDs: []string{"b3"},
 	}}
@@ -505,9 +566,9 @@ func TestConnectionRereadDoesNotInvertInterval(t *testing.T) {
 	// 読み直しで、持ち越した開始より前の切断が混ざる。
 	events := []*rawlog.Event{
 		androidEvent(t, "b2", rawlog.EventBluetooth, 7*min, nil,
-			rawlog.BluetoothPayload{DeviceName: "M720 Triathlon", Connected: false}),
+			rawlog.BluetoothPayload{DeviceName: "Mouse", Connected: false}),
 		androidEvent(t, "b4", rawlog.EventBluetooth, 40*min, nil,
-			rawlog.BluetoothPayload{DeviceName: "M720 Triathlon", Connected: false}),
+			rawlog.BluetoothPayload{DeviceName: "Mouse", Connected: false}),
 	}
 
 	result := runNormalizeWith(t, events, Options{
@@ -532,8 +593,8 @@ func TestConnectionRereadInsideSettledIntervalMakesNoNewInterval(t *testing.T) {
 	carried := []rawlog.OpenStateInterval{{
 		Device:   rawlog.Device("Phone"),
 		Source:   SourceBluetooth,
-		Key:      "WH-1000XM6",
-		Title:    "Bluetooth WH-1000XM6",
+		Key:      "Headphones",
+		Title:    "Bluetooth Headphones",
 		Start:    base(),
 		End:      timePtr(base().Add(30 * min)),
 		EventIDs: []string{"b1", "b2"},
@@ -542,7 +603,7 @@ func TestConnectionRereadInsideSettledIntervalMakesNoNewInterval(t *testing.T) {
 	events := []*rawlog.Event{
 		// 既に確定した区間の内側にある接続の読み直し。
 		androidEvent(t, "b1", rawlog.EventBluetooth, 0, nil,
-			rawlog.BluetoothPayload{DeviceName: "WH-1000XM6", Connected: true}),
+			rawlog.BluetoothPayload{DeviceName: "Headphones", Connected: true}),
 	}
 
 	result := runNormalizeWith(t, events, Options{
@@ -584,8 +645,8 @@ func TestCarryStateOfSilentDeviceSurvives(t *testing.T) {
 	carried := []rawlog.OpenStateInterval{{
 		Device:   rawlog.Device("Phone"),
 		Source:   SourceBluetooth,
-		Key:      "WH-1000XM6",
-		Title:    "Bluetooth WH-1000XM6",
+		Key:      "Headphones",
+		Title:    "Bluetooth Headphones",
 		Start:    base(),
 		EventIDs: []string{"b1"},
 	}}

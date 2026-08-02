@@ -32,7 +32,7 @@ func newImportCmd() *cobra.Command {
 		Long: "生ログを Kyou へ変換し、この端末の gkill サーバへ直接書き込む。\n" +
 			"normalize と write を1回で行うため、中間ファイルを介さない。\n" +
 			"書き込みに成功した分だけ台帳へ記録し、処理カーソルを進める。\n" +
-			"URL の取捨は $AUTOLOG_HOME/url_denylist.txt のみで決まる（Claude は関与しない）。",
+			"URL の取捨は閾値と $AUTOLOG_HOME/url_denylist.txt だけで決まる。",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cfg, err := config.Load()
 			if err != nil {
@@ -170,6 +170,8 @@ func newImportCmd() *cobra.Command {
 				return nil
 			}
 
+			cursor := pullBackCursor(result.SafeCursor, result.Proposals, stats.FailedProposalIDs)
+
 			// まだ確定していない区間を次回へ渡す。
 			// カーソルの更新より先に保存する。ここで落ちても、次回は
 			// 同じ範囲を読み直すだけで区間を失わない。
@@ -178,11 +180,17 @@ func newImportCmd() *cobra.Command {
 			}
 			// 通知の重複判定に使う記録も次回へ渡す。
 			// 判定の窓を過ぎたものは捨てる。残しても使わないので溜める意味がない。
-			if err := store.SaveNotificationSeen(ctx, result.NotificationSeen, cutoff.Add(-normalize.NotificationDedupeWindow)); err != nil {
+			// ただし基準は cutoff ではなくカーソルにする。カーソルより後の通知は
+			// 引き戻しで読み直されるので、その再判定に使う分まで捨てると
+			// 一度抑えた再通知が Kmemo として復活してしまう。
+			expireBefore := cursor
+			if expireBefore.IsZero() {
+				expireBefore = result.SafeCursor
+			}
+			if err := store.SaveNotificationSeen(ctx, result.NotificationSeen, expireBefore.Add(-normalize.NotificationDedupeWindow)); err != nil {
 				return err
 			}
 
-			cursor := pullBackCursor(result.SafeCursor, result.Proposals, stats.FailedProposalIDs)
 			if cursor.IsZero() {
 				fmt.Fprintln(out, "\nカーソルは更新しない")
 				return nil
@@ -196,7 +204,8 @@ func newImportCmd() *cobra.Command {
 	}
 
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "gkill を呼ばず、書き込む予定の内容だけを表示する")
-	cmd.Flags().BoolVar(&untilNow, "until-now", false, "既定の午前4時ではなく、いまこの時点までを処理する")
+	cmd.Flags().BoolVar(&untilNow, "until-now", false,
+		"既定の午前4時ではなく、いまの2分手前までを処理する (結合窓を跨ぐ確定を防ぐための猶予)")
 	cmd.Flags().StringVar(&logLevel, "log", "info", "ログレベル (debug, info, warn, error)")
 	cmd.Flags().StringVar(&cutoffFlag, "cutoff", "", "この時刻までを処理する (RFC3339)。既定は直近の午前4時")
 	cmd.Flags().StringVar(&sinceFlag, "since", "", "開始位置 (RFC3339)。既定は前回の処理カーソル")
@@ -258,13 +267,21 @@ func newClientResolver(ctx context.Context, cfg *config.Config, logger *slog.Log
 	}
 }
 
+// untilNowCutoffLag は --until-now のときに「いま」から引く猶予。
+//
+// 接続系 (Wi-Fi・Bluetooth・充電) やウィンドウの結合は「次のイベント」を見て
+// 初めて判定される。直近ちょうどまで処理すると、切断・切替の直後が
+// 結合相手を待たずに確定しうる。最長のマージ窓 (1分) を確実に超える値にし、
+// run_import.ps1 が自前で持つ 2 分と揃える。直近 2 分は次回にまわるだけで失われない。
+const untilNowCutoffLag = 2 * time.Minute
+
 // resolveImportCutoff は取り込みの上限時刻を決める。
 func resolveImportCutoff(flag string, untilNow bool) (time.Time, error) {
 	if untilNow {
 		if flag != "" {
 			return time.Time{}, fmt.Errorf("--until-now と --cutoff は同時に指定できない")
 		}
-		return time.Now(), nil
+		return time.Now().Add(-untilNowCutoffLag), nil
 	}
 	return resolveCutoff(flag)
 }

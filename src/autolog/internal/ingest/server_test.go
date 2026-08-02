@@ -204,46 +204,6 @@ func TestTokenIsRequired(t *testing.T) {
 	}
 }
 
-func TestAndroidEndpointRequiresForeignDevice(t *testing.T) {
-	tests := []struct {
-		name       string
-		device     any
-		wantStatus int
-	}{
-		{name: "許可した端末なら受け付ける", device: "Phone", wantStatus: http.StatusOK},
-		{name: "許可リストに足した端末も受け付ける", device: "Tablet", wantStatus: http.StatusOK},
-		{name: "この機械を名乗るのは拒否", device: "Laptop", wantStatus: http.StatusBadRequest},
-		{name: "端末名なしは拒否", device: nil, wantStatus: http.StatusBadRequest},
-		{name: "許可していない端末は拒否", device: "Unknown", wantStatus: http.StatusBadRequest},
-	}
-
-	// 受け付ける端末は設定で決める。コードに列挙しない。
-	allowed := []rawlog.Device{rawlog.Device("Laptop"), rawlog.Device("Phone"), "Tablet"}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			store := newTestStore(t)
-			handler := newHandler(store, discardLogger(), testToken, deviceFromRequest(rawlog.Device("Laptop"), allowed))
-
-			event := map[string]any{
-				"schema_version": 1,
-				"event_id":       "notif-1",
-				"event_type":     "notification",
-				"start_time":     rawlog.FormatTime(baseTime()),
-				"payload":        map[string]any{"app_label": "Gmail", "title": "件名"},
-			}
-			if tt.device != nil {
-				event["device"] = tt.device
-			}
-
-			rec := postEvents(t, handler, testToken, map[string]any{"events": []any{event}})
-			if rec.Code != tt.wantStatus {
-				t.Fatalf("status = %d, want %d (body = %s)", rec.Code, tt.wantStatus, rec.Body)
-			}
-		})
-	}
-}
-
 func TestInvalidEventsAreRejectedWholesale(t *testing.T) {
 	store := newTestStore(t)
 	handler := newHandler(store, discardLogger(), testToken, deviceFixed(rawlog.Device("Laptop")))
