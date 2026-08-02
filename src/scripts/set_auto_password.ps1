@@ -24,12 +24,13 @@ if (-not $EnvFile) { $EnvFile = Join-Path $PSScriptRoot 'autolog.env' }
 # 日本語コメントの直後の行が黙って読み落とされる。
 $settings = Read-GkillEnvFile $EnvFile
 
-$prefix = $settings['GKILL_AUTO_USER_PREFIX']
+# 実環境変数 → autolog.env の順で見る (Go 側と同じ)。
+$prefix = Get-GkillSetting $settings 'GKILL_AUTO_USER_PREFIX'
 if (-not $prefix) { throw "GKILL_AUTO_USER_PREFIX が $EnvFile にありません" }
 
-$base = $settings['GKILL_BASE_URL']
+$base = Get-GkillSetting $settings 'GKILL_BASE_URL'
 if (-not $base) { throw "GKILL_BASE_URL が $EnvFile にありません" }
-if ($settings['GKILL_INSECURE'] -in @('true', '1', 'yes', 'on')) { Enable-GkillInsecureTls }
+if (Test-GkillInsecure $settings) { Enable-GkillInsecureTls }
 
 # AUTOLOG_ALLOWED_DEVICES は省略できる（autolog.env.example・Go 側と同じ扱い）。
 # この端末 (AUTOLOG_DEVICE) は常に対象へ含める。

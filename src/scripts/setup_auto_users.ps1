@@ -18,12 +18,20 @@ param(
     [Parameter(Mandatory)][string]$UserPrefix,
     [Parameter(Mandatory)][string[]]$Devices,
     # 何をするかだけ表示して、実際には作らない。
-    [switch]$WhatIfOnly
+    [switch]$WhatIfOnly,
+    # 証明書の検証を省く。GKILL_INSECURE (環境変数か autolog.env) でも指定できる。
+    [switch]$Insecure
 )
 
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot '_gkill_api.ps1')
-Enable-GkillInsecureTls
+
+# 証明書の検証は明示されたときだけ省く (他のスクリプトと同じ扱い)。
+# 以前はこのスクリプトだけ無条件にオフで、-BaseUrl に LAN 越しの gkill を
+# 指定した場合も管理者パスワードのハッシュを検証なしで送っていた。
+$envFile = Join-Path $PSScriptRoot 'autolog.env'
+$settings = if (Test-Path $envFile) { Read-GkillEnvFile $envFile } else { @{} }
+if ($Insecure -or (Test-GkillInsecure $settings)) { Enable-GkillInsecureTls }
 
 # ---------------------------------------------------------------- 事前確認
 

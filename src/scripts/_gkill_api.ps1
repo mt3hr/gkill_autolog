@@ -59,11 +59,17 @@ function Test-GkillReachable([string]$BaseUrl, [int]$TimeoutMs = 5000) {
 function Invoke-GkillApi([string]$BaseUrl, [string]$Path, [hashtable]$Body) {
     $json = $Body | ConvertTo-Json -Depth 8
 
+    # 本文は UTF-8 のバイト列にしてから渡す。
+    # 5.1 の Invoke-RestMethod は文字列の本文を既定のエンコーディングで送るため、
+    # 日本語の端末名・ユーザー名が `???` に潰れて届く (7 では化けないので
+    # 開発環境では気づけない)。バイト列ならどちらでもそのまま届く。
+    $bytes = [Text.Encoding]::UTF8.GetBytes($json)
+
     $arguments = @{
         Uri         = "$BaseUrl$Path"
         Method      = 'Post'
-        ContentType = 'application/json'
-        Body        = $json
+        ContentType = 'application/json; charset=utf-8'
+        Body        = $bytes
     }
     # 7 以降は引数で証明書検証を省ける。5.1 は Enable-GkillInsecureTls で対応済み。
     # どちらも GKILL_INSECURE を見て Enable-GkillInsecureTls を呼んだときだけ省く。
@@ -101,6 +107,23 @@ function Get-GkillError($Response) {
     return ($Response.errors | ForEach-Object { "$($_.error_code) $($_.error_message)" }) -join ' / '
 }
 
+# Get-GkillSetting は設定値を「実環境変数 → autolog.env」の順で返す。
+#
+# Go 側 (config.Load) と同じ優先順位。ここが逆だと、環境変数で運用している
+# 構成で確認スクリプトと本番 (autolog import) が別の設定を見てしまい、
+# 「確認は通ったのに本番は別の端末へ書く」ようなずれが起きる。
+function Get-GkillSetting([hashtable]$Settings, [string]$Key) {
+    $fromEnv = [Environment]::GetEnvironmentVariable($Key)
+    if ($fromEnv) { return $fromEnv }
+    if ($Settings -and $Settings[$Key]) { return $Settings[$Key] }
+    return ''
+}
+
+# Test-GkillInsecure は GKILL_INSECURE (環境変数または設定ファイル) が真かを返す。
+function Test-GkillInsecure([hashtable]$Settings) {
+    return (Get-GkillSetting $Settings 'GKILL_INSECURE') -in @('true', '1', 'yes', 'on')
+}
+
 # Get-GkillTargetDevices は端末別ユーザーを確認・設定する対象の端末名を返す。
 #
 # AUTOLOG_ALLOWED_DEVICES は省略できる。Go 側 (config.resolveAllowedDevices) と
@@ -108,10 +131,10 @@ function Get-GkillError($Response) {
 # ここが食い違うと、確認スクリプトが実際の書き込み先を確認しないまま
 # 「準備できています」と言ってしまう。
 function Get-GkillTargetDevices([hashtable]$Settings) {
-    $devices = @(($Settings['AUTOLOG_ALLOWED_DEVICES'] -split ',') |
+    $devices = @(((Get-GkillSetting $Settings 'AUTOLOG_ALLOWED_DEVICES') -split ',') |
         ForEach-Object { $_.Trim() } | Where-Object { $_ })
 
-    $local = $Settings['AUTOLOG_DEVICE']
+    $local = Get-GkillSetting $Settings 'AUTOLOG_DEVICE'
     if (-not $local) {
         # config.go の defaultDeviceName と同じ落とし方（_ . 空白を除く）。
         $local = $env:COMPUTERNAME -replace '[_.\s]', ''
