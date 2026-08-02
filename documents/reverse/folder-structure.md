@@ -150,6 +150,7 @@ $AUTOLOG_HOME/                既定は %LOCALAPPDATA%\gkill_autolog
 ├── raw.db                    生ログ（追記専用）
 ├── ledger.db                 書き込み済み台帳
 ├── url_denylist.txt          URLog にしない URL のパターン
+├── notification_denylist.txt Kmemo にしない通知のパターン
 ├── ingest_token.txt          Chrome 拡張との共有トークン
 ├── screenshots/              撮影した画像の置き場
 └── logs/                     実行ログ

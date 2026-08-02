@@ -18,6 +18,7 @@ import (
 //   - `#` で始まる行と空行は無視する
 //   - 既定は**部分一致**（大文字小文字を区別しない）。例: doubleclick.net
 //   - `re:` で始まる行は正規表現。例: re:^https://example\.com/ads/
+//     こちらは大文字小文字を区別する。無視したいときは (?i) を先頭に付ける
 type DenyList struct {
 	substrings []string
 	regexps    []*regexp.Regexp

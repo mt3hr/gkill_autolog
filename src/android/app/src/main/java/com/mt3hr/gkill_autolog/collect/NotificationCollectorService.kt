@@ -54,6 +54,19 @@ class NotificationCollectorService : NotificationListenerService() {
             .put("notification_key", notificationKey)
             .put("ongoing", false)
 
+        // 通知の種類を表す値。Android が持っているものをそのまま入れる。
+        // 同じアプリでも種類ごとにチャンネルが分かれるので、
+        // 「Chrome のダウンロード完了だけ除外する」のような判定ができる。
+        // どちらも無いことがあるので、取れたときだけ入れる。
+        val channelId = notification.channelId.orEmpty()
+        if (channelId.isNotEmpty()) {
+            payload.put("channel_id", channelId)
+        }
+        val category = notification.category.orEmpty()
+        if (category.isNotEmpty()) {
+            payload.put("category", category)
+        }
+
         // 同じ通知が同じ時刻で再度届いても二重に記録しない。
         // 内容が変わる更新は postTime も変わるので別イベントとして残る。
         val eventId = "notification:$notificationKey:${sbn.postTime}"

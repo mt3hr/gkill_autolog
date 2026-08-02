@@ -122,7 +122,7 @@ type Options struct {
 	// DenyList は URLog にしない URL のパターン。nil なら除外しない。
 	DenyList *DenyList
 	// NotificationDenyList は Kmemo にしない通知のパターン。nil なら除外しない。
-	// パッケージ名とアプリ名の両方を照合する。
+	// パッケージ名・アプリ名・チャンネルIDを照合する。
 	NotificationDenyList *DenyList
 	// OpenStates は前回までに持ち越された区間。
 	// 接続区間なら、開始イベントが今回の窓の外にあっても閉じられるようになる。

@@ -162,7 +162,9 @@
         "title": { "type": "string" },
         "body": { "type": "string" },
         "notification_key": { "type": "string", "description": "同一通知の更新をまとめるためのキー。" },
-        "ongoing": { "type": "boolean", "description": "常駐通知。true のものは書き込み対象外。" }
+        "ongoing": { "type": "boolean", "description": "常駐通知。true のものは書き込み対象外。" },
+        "channel_id": { "type": "string", "description": "通知チャンネルのID。アプリが決める文字列。除外の判定に使う。gkill へは出さない。" },
+        "category": { "type": "string", "description": "Android の通知カテゴリ。付いていないことも多い。gkill へは出さない。" }
       }
     }
   }

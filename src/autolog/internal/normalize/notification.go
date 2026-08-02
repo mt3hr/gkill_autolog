@@ -48,10 +48,19 @@ func notifications(device rawlog.Device, events []*rawlog.Event, opts Options, c
 		if payload.Ongoing {
 			continue
 		}
-		// パッケージ名とアプリ名の両方を見る。
+		// パッケージ名・アプリ名・チャンネルIDを見る。
+		// パッケージ名とアプリ名の両方を見るのは、
 		// 収集元によってはパッケージ名が取れないことがあるため。
+		// チャンネルIDも見るのは、ダウンロード完了のように
+		// 「同じアプリの一部の通知だけ落としたい」場合があるため。
+		// カテゴリは msg / sys のような短い固定語彙で、部分一致だと
+		// 利用者の書いたパターンが意図せず当たるので照合しない。
+		// チャンネルIDはこの項目ができる前の生ログでは空なので、
+		// 空のときは照合しない。空文字に当たる正規表現を書かれても
+		// 過去の分がまとめて消えないようにする。
 		if opts.NotificationDenyList.Matches(payload.PackageName) ||
-			opts.NotificationDenyList.Matches(payload.AppLabel) {
+			opts.NotificationDenyList.Matches(payload.AppLabel) ||
+			(payload.ChannelID != "" && opts.NotificationDenyList.Matches(payload.ChannelID)) {
 			continue
 		}
 		if strings.TrimSpace(payload.Title) == "" && strings.TrimSpace(payload.Body) == "" {
