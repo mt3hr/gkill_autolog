@@ -16,6 +16,15 @@ const flushInterval = 5 * time.Second
 // flushBatchSize はこの件数に達したら間隔を待たずに書き出す。
 const flushBatchSize = 64
 
+// finalFlushBusyWait は停止時の最後の書き出しに掛けるロック待ちの上限。
+//
+// コンソールのクローズやログオフでは、Windows が既定5秒でプロセスを殺す。
+// そのとき import のトランザクションが raw.db を掴んでいると、
+// 通常のロック待ち (10秒) を待っているだけで期限切れになり、最後のイベント
+// (collector_stop や直前の入力) が1件も書けずに消える。
+// 5秒の枠内に収まる待ちにして、書ける状況なら確実に書く。
+const finalFlushBusyWait = 3 * time.Second
+
 // Emitter は各コレクタが作ったイベントを受け取り、まとめて生ログストアへ書き込む。
 //
 // 収集側を DB の都合で待たせないよう、投入は非同期にする。
@@ -79,7 +88,7 @@ func (e *Emitter) Run(ctx context.Context) error {
 				}
 				break
 			}
-			e.flush(context.WithoutCancel(ctx), pending)
+			e.finalFlush(context.WithoutCancel(ctx), pending)
 			return nil
 
 		case event := <-e.events:
@@ -125,6 +134,21 @@ func (e *Emitter) flush(ctx context.Context, pending []*rawlog.Event) []*rawlog.
 		e.logger.Debug("重複したイベントを除いて書き込んだ", "inserted", inserted, "total", len(pending))
 	}
 	return pending[:0]
+}
+
+// finalFlush は停止時の最後の書き出し。
+//
+// ロック待ちを縮めた接続で書く。プロセスはこの後すぐ終わるので、
+// 書けなかった分の持ち越しはない (失われる)。未終了セッションは
+// 次回起動の recoverUnfinishedSession が補う。
+func (e *Emitter) finalFlush(ctx context.Context, pending []*rawlog.Event) {
+	if len(pending) == 0 {
+		return
+	}
+	if _, err := e.store.PutBatchFinal(ctx, pending, finalFlushBusyWait); err != nil {
+		e.logger.Error("停止時の書き出しに失敗した。この分のイベントは失われる",
+			"count", len(pending), "error", err)
+	}
 }
 
 // Device は収集元の端末名を返す。

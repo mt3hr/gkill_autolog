@@ -92,12 +92,18 @@ var migrateSQL = []struct {
 	{table: "open_state_interval", column: "end_time", sql: `ALTER TABLE open_state_interval ADD COLUMN end_time TEXT`},
 }
 
+// defaultBusyTimeout はロック待ちの上限。
+// import のトランザクションと収集の書き込みが同じ raw.db を触るため、
+// 短すぎると通常運転でも書き損ねる。
+const defaultBusyTimeout = 10 * time.Second
+
 // OpenStore は raw.db を開き、必要ならスキーマを作成する。
 func OpenStore(path string) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, fmt.Errorf("failed to create directory for %s: %w", path, err)
 	}
-	dsn := "file:" + path + "?_pragma=busy_timeout(10000)&_pragma=synchronous(NORMAL)&_pragma=journal_mode(WAL)"
+	dsn := fmt.Sprintf("file:%s?_pragma=busy_timeout(%d)&_pragma=synchronous(NORMAL)&_pragma=journal_mode(WAL)",
+		path, defaultBusyTimeout.Milliseconds())
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open %s: %w", path, err)
@@ -183,13 +189,48 @@ func (s *Store) Put(ctx context.Context, e *Event) (bool, error) {
 // 同じトランザクションで低水位マーク (CursorBackfill) を更新する。
 // 遅れて届いた区間イベントを import が読み直せるようにするため。
 func (s *Store) PutBatch(ctx context.Context, events []*Event) (int, error) {
+	return s.putBatch(ctx, s.db, events)
+}
+
+// PutBatchFinal は停止時の最終書き出し用。ロック待ちを wait まで縮めた接続で書く。
+//
+// コンソールのクローズやログオフでは Windows が既定5秒でプロセスを殺す。
+// 通常のロック待ち (defaultBusyTimeout = 10秒) をそのまま待つと、import の
+// トランザクションが raw.db を掴んでいるだけで1件も書けずに死ぬ。
+// modernc のドライバは busy_timeout の待ちの間 context のキャンセルを見ない
+// (実測) ので、期限は ctx ではなく接続の busy_timeout で付ける。
+func (s *Store) PutBatchFinal(ctx context.Context, events []*Event, wait time.Duration) (int, error) {
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get connection for final put: %w", err)
+	}
+	defer conn.Close()
+
+	if _, err := conn.ExecContext(ctx, fmt.Sprintf("PRAGMA busy_timeout=%d", wait.Milliseconds())); err != nil {
+		return 0, fmt.Errorf("failed to shorten busy timeout: %w", err)
+	}
+	// 接続はプールへ戻るので、縮めた busy_timeout を既定へ戻しておく。
+	defer func() {
+		_, _ = conn.ExecContext(context.WithoutCancel(ctx),
+			fmt.Sprintf("PRAGMA busy_timeout=%d", defaultBusyTimeout.Milliseconds()))
+	}()
+
+	return s.putBatch(ctx, conn, events)
+}
+
+// txBeginner は *sql.DB と *sql.Conn の共通部分。
+type txBeginner interface {
+	BeginTx(context.Context, *sql.TxOptions) (*sql.Tx, error)
+}
+
+func (s *Store) putBatch(ctx context.Context, db txBeginner, events []*Event) (int, error) {
 	for _, e := range events {
 		if err := e.Validate(); err != nil {
 			return 0, fmt.Errorf("invalid event: %w", err)
 		}
 	}
 
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, fmt.Errorf("failed to begin transaction: %w", err)
 	}
