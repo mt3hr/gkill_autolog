@@ -49,6 +49,7 @@ autolog/
 │   ├── normalize/        生ログ → 提案。ルール処理の中核
 │   ├── gkillclient/      gkill の HTTP API クライアント。書き込みの制御もここ
 │   ├── ledger/           書き込み済み台帳
+│   ├── proclock/         多重起動を防ぐ OS ファイルロック
 │   └── config/           設定とディレクトリの解決
 └── schema/
     └── event.schema.json 生ログのスキーマ
@@ -72,6 +73,7 @@ cmd/autolog
     ├→ inbox ───┼→ rawlog
     ├→ normalize┘
     ├→ gkillclient ─→ ledger
+    ├→ proclock
     └→ config ──→ rawlog
 ```
 
@@ -163,6 +165,8 @@ $AUTOLOG_HOME/                既定は %LOCALAPPDATA%\gkill_autolog
 ├── url_denylist.txt          URLog にしない URL のパターン
 ├── notification_denylist.txt Kmemo にしない通知のパターン
 ├── ingest_token.txt          Chrome 拡張との共有トークン
+├── collect.lock              収集の多重起動防止（残っていても無害。消さなくてよい）
+├── import.lock               取り込みの多重起動防止（同上）
 ├── screenshots/              撮影した画像の置き場
 └── logs/                     実行ログ
 ```

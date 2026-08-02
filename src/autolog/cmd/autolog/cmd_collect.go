@@ -1,15 +1,19 @@
 package main
 
 import (
+	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
 	"github.com/mt3hr/gkill_autolog/src/autolog/internal/collect"
 	"github.com/mt3hr/gkill_autolog/src/autolog/internal/config"
 	"github.com/mt3hr/gkill_autolog/src/autolog/internal/ingest"
+	"github.com/mt3hr/gkill_autolog/src/autolog/internal/proclock"
 	"github.com/mt3hr/gkill_autolog/src/autolog/internal/rawlog"
 	"github.com/mt3hr/gkill_autolog/src/autolog/internal/shot"
 	"github.com/spf13/cobra"
@@ -36,6 +40,21 @@ func newCollectCmd() *cobra.Command {
 			if err := cfg.EnsureDirs(); err != nil {
 				return err
 			}
+
+			// 収集の多重起動を防ぐ。raw.db に触る前に取ること。
+			// 2個目のインスタンスは、稼働中インスタンスの開きっぱなしセッションを
+			// 「前回の異常終了」と誤認して偽の recovered lock を書き、
+			// さらに collector_start / collector_stop を書いてから
+			// 受け口のポート衝突で死ぬ。利用セッションが分断され、
+			// 接続区間も観測の切れ目として閉じられてしまう。
+			lock, err := proclock.Acquire(filepath.Join(cfg.Home, "collect.lock"))
+			if errors.Is(err, proclock.ErrBusy) {
+				return fmt.Errorf("収集が既に常駐しているため起動しない。2個目を動かすと稼働中の記録が壊れる: %w", err)
+			}
+			if err != nil {
+				return err
+			}
+			defer func() { _ = lock.Release() }()
 
 			// フラグでの指定は設定より優先する。
 			// 一度だけ間隔を変えて試したいときに設定ファイルを書き換えずに済む。

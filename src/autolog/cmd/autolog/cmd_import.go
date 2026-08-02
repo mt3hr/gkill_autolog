@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 	"github.com/mt3hr/gkill_autolog/src/autolog/internal/inbox"
 	"github.com/mt3hr/gkill_autolog/src/autolog/internal/ledger"
 	"github.com/mt3hr/gkill_autolog/src/autolog/internal/normalize"
+	"github.com/mt3hr/gkill_autolog/src/autolog/internal/proclock"
 	"github.com/mt3hr/gkill_autolog/src/autolog/internal/rawlog"
 	"github.com/spf13/cobra"
 )
@@ -41,6 +43,20 @@ func newImportCmd() *cobra.Command {
 			if err := cfg.EnsureDirs(); err != nil {
 				return err
 			}
+
+			// 取り込みの多重起動を防ぐ。
+			// 台帳の既書き込み判定は起動時のスナップショットで、Kyou の ID は
+			// 書き込みごとに採番される。並行して走ると両方が「未書き込み」と
+			// 判定して同じ区間の Kyou を二重に登録してしまう。
+			// (午前4時のタスクと手動実行・同期スクリプトの重なりが現実に起きる)
+			lock, err := proclock.Acquire(filepath.Join(cfg.Home, "import.lock"))
+			if errors.Is(err, proclock.ErrBusy) {
+				return fmt.Errorf("別の取り込みが実行中のため中止した。並行して走らせると同じ Kyou が二重に登録される: %w", err)
+			}
+			if err != nil {
+				return err
+			}
+			defer func() { _ = lock.Release() }()
 
 			logger, err := newLogger(logLevel)
 			if err != nil {
