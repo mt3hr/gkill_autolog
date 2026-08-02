@@ -575,6 +575,78 @@ func TestMediaPlayWithURLMergesTimeIsBySameTitle(t *testing.T) {
 	}
 }
 
+func TestMediaPlayDoesNotMergeDifferentVideosWithSameTitle(t *testing.T) {
+	// 自動再生で次の動画へ進んだものは1本ずつ残す。
+	//
+	// 切り替わりの間隔は数秒しか空かないので、題名がたまたま同じだと
+	// タイトルで結合していた頃は2本が1本にまとまっていた。
+	// シリーズものや、収集側がタイトルを取り違えたときに実際に起きる。
+	result := runNormalize(t, []*rawlog.Event{
+		event(t, "m1", rawlog.EventMediaPlay, 0, durationPtr(10*min), rawlog.MediaPlayPayload{
+			Service: rawlog.ServiceYouTube, URL: "https://www.youtube.com/watch?v=aaaaaaaaaaa",
+			VideoID: "aaaaaaaaaaa", Title: "同じ題名", PlayedSeconds: 600,
+		}),
+		event(t, "m2", rawlog.EventMediaPlay, 10*min+10*sec, durationPtr(20*min), rawlog.MediaPlayPayload{
+			Service: rawlog.ServiceYouTube, URL: "https://www.youtube.com/watch?v=bbbbbbbbbbb",
+			VideoID: "bbbbbbbbbbb", Title: "同じ題名", PlayedSeconds: 590,
+		}),
+	}, 60*min)
+
+	if got := len(proposalsByKind(result, SourceMedia, KindURLog)); got != 2 {
+		t.Errorf("URLog = %d 件, want 2", got)
+	}
+	timeIses := proposalsByKind(result, SourceMedia, KindTimeIs)
+	if len(timeIses) != 2 {
+		t.Fatalf("TimeIs = %d 件, want 2 (別の動画が1本にまとまっている)", len(timeIses))
+	}
+	if timeIses[0].EndTime.Sub(base()) != 10*min {
+		t.Errorf("1本目の終了 = %v, want %v", timeIses[0].EndTime.Sub(base()), 10*min)
+	}
+	if timeIses[1].StartTime.Sub(base()) != 10*min+10*sec {
+		t.Errorf("2本目の開始 = %v, want %v", timeIses[1].StartTime.Sub(base()), 10*min+10*sec)
+	}
+}
+
+func TestMediaPlayMergesSameVideoSplitIntoFragments(t *testing.T) {
+	// 同じ動画の区間が細切れに届いたら従来どおり1本にまとめる。
+	// MediaSession は曲を止めずに聴いていても区間を切って返す。
+	result := runNormalize(t, []*rawlog.Event{
+		event(t, "m1", rawlog.EventMediaPlay, 0, durationPtr(2*min), rawlog.MediaPlayPayload{
+			Service: rawlog.ServiceYouTube, URL: "https://www.youtube.com/watch?v=aaaaaaaaaaa",
+			VideoID: "aaaaaaaaaaa", Title: "動画タイトル", PlayedSeconds: 120,
+		}),
+		event(t, "m2", rawlog.EventMediaPlay, 2*min+10*sec, durationPtr(4*min), rawlog.MediaPlayPayload{
+			Service: rawlog.ServiceYouTube, URL: "https://www.youtube.com/watch?v=aaaaaaaaaaa",
+			VideoID: "aaaaaaaaaaa", Title: "動画タイトル", PlayedSeconds: 110,
+		}),
+	}, 60*min)
+
+	timeIses := proposalsByKind(result, SourceMedia, KindTimeIs)
+	if len(timeIses) != 1 {
+		t.Fatalf("TimeIs = %d 件, want 1", len(timeIses))
+	}
+	if timeIses[0].StartTime.Sub(base()) != 0 || timeIses[0].EndTime.Sub(base()) != 4*min {
+		t.Errorf("区間 = %v..%v", timeIses[0].StartTime, timeIses[0].EndTime)
+	}
+}
+
+func TestMediaPlayWithoutURLStillMergesByTitle(t *testing.T) {
+	// 動画IDもURLも無い収集元 (Android の MediaSession) は
+	// タイトルしか手がかりが無いので、従来どおりタイトルで結合する。
+	result := runNormalize(t, []*rawlog.Event{
+		mediaEventNoURL(t, "m1", 0, 2*min, 120, "曲名", "アーティスト"),
+		mediaEventNoURL(t, "m2", 2*min+10*sec, 4*min, 110, "曲名", "アーティスト"),
+	}, 60*min)
+
+	timeIses := proposalsByKind(result, SourceMedia, KindTimeIs)
+	if len(timeIses) != 1 {
+		t.Fatalf("TimeIs = %d 件, want 1", len(timeIses))
+	}
+	if timeIses[0].StartTime.Sub(base()) != 0 || timeIses[0].EndTime.Sub(base()) != 4*min {
+		t.Errorf("区間 = %v..%v", timeIses[0].StartTime, timeIses[0].EndTime)
+	}
+}
+
 func TestMediaPlayWithURLNeedsTitleForTimeIs(t *testing.T) {
 	// タイトルが無ければ何を再生したのか分からないので TimeIs にはしない。
 	// URL は観測できた事実なので URLog は残す。

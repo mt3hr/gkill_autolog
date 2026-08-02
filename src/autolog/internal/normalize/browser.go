@@ -217,7 +217,7 @@ func mediaPlays(device rawlog.Device, events []*rawlog.Event, opts Options, carr
 		}
 
 		intervals = append(intervals, timedInterval{
-			key:      title,
+			key:      mediaMergeKey(payload, title),
 			title:    title,
 			start:    event.StartTime,
 			end:      mediaEndTime(event, payload),
@@ -240,6 +240,25 @@ func mediaPlays(device rawlog.Device, events []*rawlog.Event, opts Options, carr
 		})
 	}
 	return proposals, urlogURLs, pending, nil
+}
+
+// mediaMergeKey は「同じ再生の続きか」を判定する鍵を返す。
+//
+// タイトルでは判定できない。自動再生で次の動画・次の曲へ進む間隔は数秒しか
+// 空かないため、題名がたまたま同じだと別のコンテンツどうしが1本にまとまる。
+// 連続再生したものは1本ずつ残す必要がある。
+//
+// 動画IDかURLを確認できていればそれを使う。どちらも無いのは Android の
+// MediaSession のようにタイトルしか返さない収集元で、そこは従来どおり
+// タイトルで結合する。1曲の再生が細切れに届くのを束ねるためにこの結合がある。
+func mediaMergeKey(payload rawlog.MediaPlayPayload, title string) string {
+	if payload.VideoID != "" {
+		return "video_id:" + payload.VideoID
+	}
+	if url := strings.TrimSpace(payload.URL); url != "" {
+		return "url:" + url
+	}
+	return "title:" + title
 }
 
 // mediaEndTime は再生の終了時刻を返す。

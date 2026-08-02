@@ -7,6 +7,11 @@
 //   - シークで飛んだ分は数えない
 //   - ループ再生・短い素材は数えない (装飾目的の自動再生を除くため)
 //
+// 数えるコンテンツが変わったらそこで区切る。自動再生で次の動画・次の曲へ
+// 進んだ場合も1本ずつ別の再生として報告する（要件 §8.1）。
+// タイトルは報告時ではなく計測中に取り込む。切り替わりに気づくのは切り替わった
+// 後なので、報告時に読むと次のコンテンツのタイトルが載ってしまう。
+//
 // URL は実際に開いていたページのものだけを載せる。
 // 検索URLや推測したURLを作ってはならない（要件 §8.2）。
 
@@ -23,9 +28,15 @@
   // 長さが分からない (ライブ配信など) 場合は対象にする。
   const MIN_MEDIA_DURATION_SECONDS = 30;
 
+  // THUMBNAIL_VIDEO_ID はサムネイルURLに埋まっている動画ID。
+  // https://i.ytimg.com/vi/<動画ID>/... と /vi_webp/<動画ID>/... の両方を受ける。
+  // 動画IDは11文字の URL-safe base64。
+  const THUMBNAIL_VIDEO_ID = /\/vi(?:_[a-z]+)?\/([A-Za-z0-9_-]{11})\//;
+
   const host = location.hostname;
   const isYouTube = host === "www.youtube.com" || host === "m.youtube.com" || host === "youtube.com";
   const isYouTubeMusic = host === "music.youtube.com";
+  const isYouTubeFamily = isYouTube || isYouTubeMusic;
 
   // service は再生元の種別。YouTube 系以外はすべて web。
   const service = isYouTubeMusic ? "youtube_music" : isYouTube ? "youtube" : "web";
@@ -37,7 +48,7 @@
   // youtubeVideoId は URL から動画IDを取り出す。取れなければ null。
   // Shorts は `?v=` を持たず、パスに動画IDが入っている。
   function youtubeVideoId() {
-    if (!isYouTube && !isYouTubeMusic) {
+    if (!isYouTubeFamily) {
       return null;
     }
     try {
@@ -53,6 +64,33 @@
     }
   }
 
+  // metadataVideoId は MediaSession のサムネイルから動画IDを取り出す。
+  // 取れなければ null。
+  //
+  // URL に `?v=` が付かない場面でも動画IDを確認できる。YouTube Music で
+  // ライブラリやホームを見ながら聴いている間と、YouTube 本体のミニプレイヤーが
+  // これに当たる。サムネイルURLのパスに入っているのは動画IDそのものなので、
+  // ここから正式URLを組み立てるのは推測ではない（要件 §8.2）。
+  //
+  // 取り出しは YouTube 系だけで行う。他のサイトのアートワークURLがたまたま
+  // 同じ形をしていても、それが YouTube の動画IDである保証がないため。
+  function metadataVideoId() {
+    if (!isYouTubeFamily) {
+      return null;
+    }
+    const metadata = navigator.mediaSession && navigator.mediaSession.metadata;
+    if (!metadata || !metadata.artwork) {
+      return null;
+    }
+    for (const artwork of metadata.artwork) {
+      const matched = THUMBNAIL_VIDEO_ID.exec(artwork.src || "");
+      if (matched) {
+        return matched[1];
+      }
+    }
+    return null;
+  }
+
   // pageURL はハッシュを除いた現在のURL。
   // ハッシュはページ内の位置なので、同じコンテンツの再生を分けてしまう。
   function pageURL() {
@@ -65,27 +103,53 @@
     }
   }
 
-  // contentURL は再生していたコンテンツのURLを返す。
+  // contentURL は再生していたコンテンツのURLを返す。確定できなければ空文字。
   //
   // YouTube 系で動画IDが取れたときだけ、プレイリストなどのパラメータを落とした
   // 正式URLを組み立てる（要件 §8.1）。それ以外は開いていたURLをそのまま使う。
+  //
+  // YouTube 系で動画IDを取れなかった再生は URL 無しにする。開いていたページは
+  // ライブラリやホームで、再生していたコンテンツのURLではないため。
+  // 検索URLや推測したURLを作ってはならない（要件 §8.2）。
   function contentURL(videoId) {
     if (videoId) {
       const watchHost = service === "youtube_music" ? "music.youtube.com" : "www.youtube.com";
       return `https://${watchHost}/watch?v=${videoId}`;
     }
+    if (isYouTubeFamily) {
+      return "";
+    }
     return pageURL();
   }
 
-  // contentKey は「同じ再生か」を判定する鍵。
-  // YouTube 系は動画ID、それ以外はページURL。変わったら別の再生として数え直す。
+  // contentKey は「同じ再生か」を判定する鍵。変わったら別の再生として数え直す。
+  // 数える対象でなければ null を返す。
+  //
+  // YouTube 系は動画ID。取れないときは YouTube Music に限り、MediaSession の
+  // 曲名を鍵にする。アルバムアートが googleusercontent.com だと動画IDを取れないが、
+  // 聴いていた事実は残せるため（URL 無しの TimeIs になる。要件 §8.1）。
+  //
+  // YouTube 本体で動画IDを取れないのはホーム・検索結果で、サムネイルの
+  // プレビューが鳴っているだけのことがある。見ていない動画を残さないよう数えない。
+  //
+  // YouTube 系以外はページURL。
   function contentKey(videoId) {
-    return videoId || pageURL();
+    if (videoId) {
+      return videoId;
+    }
+    if (isYouTubeMusic) {
+      const metadata = sessionMetadata();
+      return metadata ? `title:${metadata.title} / ${metadata.artist}` : null;
+    }
+    if (isYouTubeFamily) {
+      return null;
+    }
+    return pageURL();
   }
 
   // isAdShowing は広告を再生中かを返す。YouTube でのみ判定できる。
   function isAdShowing() {
-    if (!isYouTube && !isYouTubeMusic) {
+    if (!isYouTubeFamily) {
       return false;
     }
     return document.querySelector(".ad-showing, .ad-interrupting") !== null;
@@ -102,7 +166,7 @@
     if (media.loop) {
       return false;
     }
-    if (media.muted && !isYouTube && !isYouTubeMusic) {
+    if (media.muted && !isYouTubeFamily) {
       return false;
     }
     if (Number.isFinite(media.duration) && media.duration < MIN_MEDIA_DURATION_SECONDS) {
@@ -118,23 +182,58 @@
     return all.find((m) => !m.paused && !m.ended) || all[0] || null;
   }
 
+  // sessionMetadata は MediaSession が持つ正式なタイトルとアーティストを返す。
+  // 持っていなければ null。ページタイトルで代用はしない。
+  function sessionMetadata() {
+    const metadata = navigator.mediaSession && navigator.mediaSession.metadata;
+    if (!metadata || !metadata.title) {
+      return null;
+    }
+    return { title: metadata.title, artist: metadata.artist || "" };
+  }
+
   // mediaMetadata は MediaSession が持つ正式なタイトルとアーティストを返す。
   // 無ければページタイトルを使う。それ以上の推測はしない。
   function mediaMetadata() {
-    const metadata = navigator.mediaSession && navigator.mediaSession.metadata;
-    if (metadata && metadata.title) {
-      return { title: metadata.title, artist: metadata.artist || "" };
-    }
-    return { title: document.title || "", artist: "" };
+    return sessionMetadata() || { title: document.title || "", artist: "" };
   }
 
-  function startPlay(key, url, media) {
+  // adoptMetadata はいま計測している再生のタイトルを取り込む。
+  //
+  // タイトルを送信時に読んではならない。自動再生で次の動画へ移ったことに
+  // 気づくのは切り替わりの後で、そのとき DOM のタイトルは既に次の動画のものに
+  // なっている。そこで前の再生の最終報告を出すため、送信時に読むと
+  // 「1つ後ろの動画のタイトル」が前の再生に載ってしまう。
+  //
+  // 計測中に取り込んでおけば、最終報告もそのときの値をそのまま送れる。
+  function adoptMetadata() {
+    if (!play) {
+      return;
+    }
+    // YouTube 系はメタデータが誰のものか確認できる。切り替わりの前後で
+    // URL とメタデータがずれている間は、追いつくまで前の値を保つ。
+    const metaVideoId = metadataVideoId();
+    if (play.videoId && metaVideoId && metaVideoId !== play.videoId) {
+      return;
+    }
+    const { title, artist } = mediaMetadata();
+    if (!title) {
+      return;
+    }
+    play.title = title;
+    play.artist = artist;
+  }
+
+  function startPlay(key, url, videoId, media) {
     play = {
       playId: crypto.randomUUID(),
       key,
       url,
-      videoId: youtubeVideoId() || "",
+      videoId: videoId || "",
       service,
+      // タイトルは adoptMetadata がこの直後に入れる。
+      title: "",
+      artist: "",
       playedSeconds: 0,
       startedAt: Date.now(),
       endedAt: Date.now(),
@@ -147,7 +246,6 @@
     if (!play || play.playedSeconds <= 0) {
       return;
     }
-    const { title, artist } = mediaMetadata();
     try {
       chrome.runtime.sendMessage({
         type: "media_progress",
@@ -155,8 +253,9 @@
         service: play.service,
         url: play.url,
         videoId: play.videoId,
-        title,
-        artist,
+        // 計測中に取り込んだ「この再生の」タイトル。いま DOM にある値ではない。
+        title: play.title,
+        artist: play.artist,
         playedSeconds: Math.round(play.playedSeconds * 10) / 10,
         startedAt: play.startedAt,
         endedAt: play.endedAt,
@@ -187,11 +286,15 @@
       return;
     }
 
-    const videoId = youtubeVideoId();
+    // 動画IDは URL から取り、取れなければ MediaSession のサムネイルから取る。
+    // ミニプレイヤーや YouTube Music のライブラリ表示中は URL に `?v=` が付かない。
+    const videoId = youtubeVideoId() || metadataVideoId();
+    const key = contentKey(videoId);
 
-    if ((isYouTube || isYouTubeMusic) && !videoId) {
-      // 一覧・ホーム・検索結果。個別コンテンツを開いていない（要件 §8.1）。
-      // ページのURLで記録すると、見ていない動画のプレビュー再生まで残ってしまう。
+    if (!key) {
+      // 何を再生しているのか確認できない。YouTube 本体のホーム・検索結果で
+      // サムネイルのプレビューが鳴っているだけのことがある（要件 §8.1）。
+      // ページのURLで記録すると、見ていない動画の再生まで残ってしまう。
       if (play) {
         report(true);
         play = null;
@@ -199,15 +302,18 @@
       return;
     }
 
-    const key = contentKey(videoId);
-
     if (!play || play.key !== key) {
-      // 別のコンテンツへ切り替わった。前の再生を確定させてから新しく数え始める。
+      // 別のコンテンツへ切り替わった。自動再生で次へ進んだ場合もここ。
+      // 前の再生を確定させてから新しく数え始める。1回の再生につき1件になる。
       if (play) {
         report(true);
       }
-      startPlay(key, contentURL(videoId), media);
+      startPlay(key, contentURL(videoId), videoId, media);
     }
+
+    // タイトルはここで取り込む。前の再生の最終報告より後なので、
+    // 次の動画のタイトルが前の再生に載ることはない。
+    adoptMetadata();
 
     if (media.paused || media.ended || isAdShowing()) {
       // 一時停止中と広告中は数えない。再開時に飛びとみなさないよう位置だけ追う。
