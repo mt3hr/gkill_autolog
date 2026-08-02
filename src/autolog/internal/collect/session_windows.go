@@ -16,6 +16,10 @@ import (
 type sessionCollector struct {
 	emitter *Emitter
 	logger  *slog.Logger
+
+	// onResume はスリープ復帰を観測したときに呼ぶ。run より前に設定すること。
+	// 接続の収集 (netPowerCollector) が suspend で閉じた区間を取り直すために使う。
+	onResume func()
 }
 
 func newSessionCollector(emitter *Emitter, logger *slog.Logger) *sessionCollector {
@@ -56,6 +60,9 @@ func (c *sessionCollector) run(ctx context.Context) error {
 			}
 			c.logger.Info("セッション状態が変化した", "action", action)
 			c.emitter.Emit(rawlog.EventSession, time.Now(), nil, rawlog.SessionPayload{Action: action})
+			if action == rawlog.SessionResume && c.onResume != nil {
+				c.onResume()
+			}
 		}
 	}
 }

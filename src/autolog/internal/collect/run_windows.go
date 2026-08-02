@@ -43,15 +43,23 @@ func Run(ctx context.Context, store *rawlog.Store, device rawlog.Device, logger 
 		emitterDone <- emitter.Run(emitterCtx)
 	}()
 
+	// スリープ復帰をセッションの収集から接続の収集へ伝える。
+	// suspend で normalize が接続区間を閉じるため、復帰後は状態を取り直して
+	// 「つながっているもの」を記録し直す必要がある。ポーリング間隔からの
+	// 自前検知 (sleepGapThreshold) では30秒未満のスリープを取りこぼす。
+	netPower := newNetPowerCollector(emitter, logger)
+	session := newSessionCollector(emitter, logger)
+	session.onResume = netPower.requestReobserve
+
 	collectors, collectorsCtx := errgroup.WithContext(ctx)
 	collectors.Go(func() error {
 		return newWindowCollector(emitter, logger).run(collectorsCtx)
 	})
 	collectors.Go(func() error {
-		return newSessionCollector(emitter, logger).run(collectorsCtx)
+		return session.run(collectorsCtx)
 	})
 	collectors.Go(func() error {
-		return newNetPowerCollector(emitter, logger).run(collectorsCtx)
+		return netPower.run(collectorsCtx)
 	})
 
 	logger.Info("収集を開始した", "device", device, "raw_db", store.Path())

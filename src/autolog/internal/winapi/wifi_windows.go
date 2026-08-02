@@ -82,7 +82,10 @@ func CurrentSSID() (string, bool, error) {
 	var listPtr unsafe.Pointer
 	ret, _, _ = procWlanEnumInterfaces.Call(uintptr(handle), 0, uintptr(unsafe.Pointer(&listPtr)))
 	if ret != 0 || listPtr == nil {
-		return "", false, nil
+		// ハンドルは開けたのに列挙できないのは一時的な失敗。
+		// 「未接続を観測できた」ことにすると偽の切断イベントになるので、
+		// エラーとして返して呼び出し側に前回の状態を維持させる。
+		return "", false, fmt.Errorf("WlanEnumInterfaces failed (ret=%d)", ret)
 	}
 	defer procWlanFreeMemory.Call(uintptr(listPtr))
 
@@ -123,8 +126,12 @@ func queryCurrentSSID(handle windows.Handle, guid windows.GUID) (string, bool, e
 		return "", false, ErrWlanPermissionDenied
 	}
 	if ret != 0 || dataPtr == nil {
-		// 接続直後や切断直後は取得できないことがある。エラーにはしない。
-		return "", false, nil
+		// 接続中のインタフェースなのに属性を読めない。接続直後や切断直後の
+		// 一時的な状態で、いま接続が有るか無いかは分からない。
+		// 「未接続を観測できた」ことにすると偽の切断イベントになるので、
+		// エラーとして返して呼び出し側に前回の状態を維持させる。
+		// 本当に切断されていれば、次のポーリングで isState が未接続になる。
+		return "", false, fmt.Errorf("WlanQueryInterface failed (ret=%d)", ret)
 	}
 	defer procWlanFreeMemory.Call(uintptr(dataPtr))
 
@@ -138,7 +145,8 @@ func queryCurrentSSID(handle windows.Handle, guid windows.GUID) (string, bool, e
 	}
 	length := attrs.ssidLength
 	if length == 0 || length > uint32(len(attrs.ssid)) {
-		return "", false, nil
+		// 接続中なのに SSID を読めないのは壊れた応答。状態不明として扱わせる。
+		return "", false, fmt.Errorf("unexpected SSID length %d", length)
 	}
 	// SSID はバイト列。UTF-8 として解釈できる想定だが、そうでなくても生値のまま扱う。
 	return string(attrs.ssid[:length]), true, nil
