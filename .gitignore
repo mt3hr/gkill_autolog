@@ -53,3 +53,5 @@ logs/
 .DS_Store
 *.swp
 *~
+# Cygwin の bash が落ちたときに残すメモリダンプ。
+*.stackdump
