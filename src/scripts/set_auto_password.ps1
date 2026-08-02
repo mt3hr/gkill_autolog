@@ -59,6 +59,12 @@ foreach ($device in $devices) {
         $login = Invoke-GkillApi $base '/api/login' @{
             user_id = $user; password_sha256 = $hash; locale_name = 'ja'
         }
+        if (Test-GkillRateLimited $login) {
+            Write-Host ''
+            Write-Host 'ログイン試行の回数制限に当たりました (IP ごとに15分で10回、成功も数えられます)。'
+            Write-Host '残りの確認を中止し、保存もしません。15分ほど待ってからやり直してください。'
+            exit 1
+        }
         if ($login.session_id) {
             Write-Host "  $user : OK"
         } else {

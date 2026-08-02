@@ -107,6 +107,16 @@ function Get-GkillError($Response) {
     return ($Response.errors | ForEach-Object { "$($_.error_code) $($_.error_message)" }) -join ' / '
 }
 
+# Test-GkillRateLimited はログイン試行の回数制限 (ERR000374) に当たったかを返す。
+#
+# gkill のログインは IP ごとに15分で10回まで。**成功した試行も数えられる。**
+# 制限に当たったあとも端末のループを回し続けると、残りの枠を使い潰して
+# 本番の取り込みまで巻き込む (実際に起きた事故)。当たったら即座に止めること。
+function Test-GkillRateLimited($Response) {
+    if (-not $Response -or -not $Response.errors) { return $false }
+    return [bool]($Response.errors | Where-Object { $_.error_code -eq 'ERR000374' })
+}
+
 # Get-GkillSetting は設定値を「実環境変数 → autolog.env」の順で返す。
 #
 # Go 側 (config.Load) と同じ優先順位。ここが逆だと、環境変数で運用している

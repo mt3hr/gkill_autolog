@@ -66,6 +66,9 @@ $adminPw = Read-GkillPasswordSha256 "管理者 ($AdminUser) のパスワード"
 $admin = Invoke-GkillApi $BaseUrl '/api/login' @{
     user_id = $AdminUser; password_sha256 = $adminPw; locale_name = 'ja'
 }
+if (Test-GkillRateLimited $admin) {
+    throw 'ログイン試行の回数制限に当たりました (IP ごとに15分で10回、成功も数えられます)。15分ほど待ってからやり直してください'
+}
 $adminError = Get-GkillError $admin
 if ($adminError -or -not $admin.session_id) {
     throw "管理者でログインできませんでした: $adminError"
@@ -139,6 +142,10 @@ foreach ($item in $plan) {
     # ログインできるか、rep が見えるかを確認する。
     $check = Invoke-GkillApi $BaseUrl '/api/login' @{
         user_id = $user; password_sha256 = $autoPw; locale_name = 'ja'
+    }
+    if (Test-GkillRateLimited $check) {
+        throw ('ログイン試行の回数制限に当たりました (IP ごとに15分で10回、成功も数えられます)。' +
+               'ユーザーの作成とパスワード設定は済んでいるので、15分ほど待ってから再実行すると残りを確認できます')
     }
     $checkError = Get-GkillError $check
     if ($checkError -or -not $check.session_id) {
