@@ -28,17 +28,23 @@ import (
 func notifications(device rawlog.Device, events []*rawlog.Event, opts Options, carried []rawlog.NotificationSeen) ([]Proposal, []rawlog.NotificationSeen, error) {
 	type pending struct {
 		firstAt  int
+		lastTime time.Time
 		payload  rawlog.NotificationPayload
 		eventIDs []string
 	}
 
 	var (
-		order   []string
-		byKey   = map[string]*pending{}
+		groups  []*pending
+		current = map[string]*pending{}
 		results []Proposal
 	)
 
 	// 同一通知IDの更新をまとめる。キーが無い通知は内容そのものをキーにする。
+	//
+	// まとめるのは NotificationUpdateWindow 以内に続いた更新だけ。
+	// Android は通知IDを使い回すので、朝の通知と夜の通知が同じキーを
+	// 持つことがある。窓なしでまとめると、処理する窓 (通常1日、初回は7日) の
+	// 中の別々の通知が「最終状態だけ」に潰れ、結果が取り込みの間隔に依存する。
 	for index, event := range filterType(events, rawlog.EventNotification) {
 		payload, err := rawlog.DecodePayload[rawlog.NotificationPayload](event)
 		if err != nil {
@@ -72,19 +78,24 @@ func notifications(device rawlog.Device, events []*rawlog.Event, opts Options, c
 			key = payload.PackageName + "\x00" + payload.Title + "\x00" + payload.Body
 		}
 
-		if existing, ok := byKey[key]; ok {
-			// 最終状態を採用する。RelatedTime は最初の通知時刻のまま据え置く。
+		if existing, ok := current[key]; ok &&
+			event.StartTime.Sub(existing.lastTime) <= NotificationUpdateWindow {
+			// 同じ通知の更新。最終状態を採用する。RelatedTime は最初の通知時刻のまま据え置く。
 			existing.payload = payload
+			existing.lastTime = event.StartTime
 			existing.eventIDs = append(existing.eventIDs, event.EventID)
 			continue
 		}
 
-		byKey[key] = &pending{
+		// 新しい通知。同じキーでも窓を超えて間が空いていれば別の通知として扱う。
+		group := &pending{
 			firstAt:  index,
+			lastTime: event.StartTime,
 			payload:  payload,
 			eventIDs: []string{event.EventID},
 		}
-		order = append(order, key)
+		current[key] = group
+		groups = append(groups, group)
 	}
 
 	// 同内容の短時間の再通知をまとめる。
@@ -98,8 +109,7 @@ func notifications(device rawlog.Device, events []*rawlog.Event, opts Options, c
 	}
 	notificationEvents := filterType(events, rawlog.EventNotification)
 
-	for _, key := range order {
-		item := byKey[key]
+	for _, item := range groups {
 		content := notificationContent(item.payload)
 		if content == "" {
 			continue
