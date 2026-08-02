@@ -250,24 +250,34 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 });
 
 async function recordProgress(message) {
-  // URL を取得できなかった再生は記録しない。
-  // 検索URLや推測したURLを作ってはならない（要件 §8.2）。
+  if (!message.playId) {
+    return;
+  }
+
+  // URL もタイトルも無い再生は、何を再生したのか分からないので記録しない。
+  //
+  // URL が無くタイトルだけの再生は残す。YouTube Music はアルバムアートから
+  // 動画IDを取れないことがあり、そのとき URL は確定できないが、聴いていた事実は
+  // 残せる。区間は常に TimeIs にする（要件 §8.1）。
+  // 埋め合わせに検索URLや推測したURLを作ってはならない（要件 §8.2）。
   //
   // 動画IDは YouTube 系でしか取れないので条件にしない。
-  // 他のサイトでは開いていたページのURLがそのまま入る。
-  if (!message.url || !message.playId) {
+  if (!message.url && !message.title) {
     return;
   }
 
   const stored = await chrome.storage.local.get(KEY_PENDING_PLAYS);
   const pending = stored[KEY_PENDING_PLAYS] || {};
+  const previous = pending[message.playId];
 
   pending[message.playId] = {
     service: message.service,
-    url: message.url,
+    url: message.url || "",
     videoId: message.videoId,
-    title: message.title || "",
-    artist: message.artist || "",
+    // 確定済みのタイトルを空で潰さない。
+    // MediaSession がまだ返さない間の報告が後から届くことがある。
+    title: message.title || (previous ? previous.title : "") || "",
+    artist: message.artist || (previous ? previous.artist : "") || "",
     playedSeconds: message.playedSeconds,
     startedAt: message.startedAt,
     endedAt: message.endedAt,
@@ -303,7 +313,9 @@ async function finalizePlays(now) {
       captured_at: new Date(now).toISOString(),
       payload: {
         service: play.service,
-        url: play.url,
+        // URL を確定できなかった再生は項目ごと落とす。normalize は
+        // URL 無しの再生を TimeIs だけにする（要件 §8.1）。
+        url: play.url || undefined,
         // 動画IDは YouTube 系でしか取れない。無いときは項目ごと落とす。
         video_id: play.videoId || undefined,
         title: play.title,
