@@ -74,6 +74,14 @@ const (
 	ChargeMergeWindow = 30 * time.Second
 	// NotificationDedupeWindow はこの時間内の同内容の再通知を1件にまとめる（要件 §13）。
 	NotificationDedupeWindow = 5 * time.Minute
+	// NotificationUpdateWindow は同一通知キーの更新をひとつの通知とみなす間隔。
+	//
+	// 「同一通知IDの更新は最終状態だけを記録する」（要件 §13）ためのまとめだが、
+	// Android は通知IDを使い回すので、無制限にまとめると処理する窓
+	// （通常1日、初回は7日）の中の別々の通知が最終状態だけに潰れ、
+	// 結果が取り込みの間隔に依存してしまう。
+	// この間隔を超えて間が空いた更新は、同じキーでも別の通知として扱う。
+	NotificationUpdateWindow = 30 * time.Minute
 )
 
 // Proposal は gkill へ書き込む1件の提案。

@@ -1048,6 +1048,28 @@ func TestNotificationUpdateKeepsLastStateAndFirstTime(t *testing.T) {
 	}
 }
 
+func TestNotificationSameKeyAfterGapIsSeparate(t *testing.T) {
+	// Android は通知IDを使い回す。同じキーでも NotificationUpdateWindow を
+	// 超えて間が空いたら、別の通知として両方記録する。
+	// まとめてしまうと、朝の通知が夜の通知の最終状態に潰れ、
+	// 処理する窓の広さ (取り込みの間隔) で結果が変わってしまう。
+	result := runNormalize(t, []*rawlog.Event{
+		notificationEvent(t, "n1", 0, "reused-key", "朝の件名", "朝の本文", false),
+		notificationEvent(t, "n2", NotificationUpdateWindow+min, "reused-key", "夜の件名", "夜の本文", false),
+	}, 5*60*min)
+
+	kmemos := proposalsBySource(result, SourceNotification)
+	if len(kmemos) != 2 {
+		t.Fatalf("件数 = %d, want 2 (%+v)", len(kmemos), kmemos)
+	}
+	if !strings.Contains(kmemos[0].Content, "朝の件名") {
+		t.Errorf("1件目に朝の通知が残っていない: %q", kmemos[0].Content)
+	}
+	if !strings.Contains(kmemos[1].Content, "夜の件名") {
+		t.Errorf("2件目に夜の通知が残っていない: %q", kmemos[1].Content)
+	}
+}
+
 func TestNotificationRepeatWithinShortWindowIsCollapsed(t *testing.T) {
 	tests := []struct {
 		name string
