@@ -110,14 +110,26 @@ func connectionStates(device rawlog.Device, events []*rawlog.Event, opts Options
 	// 「接続中」の区間に含まれてしまう。復帰後は収集側がつながっているものを
 	// 記録し直すので、そこから新しい区間が始まる。
 	// ロックや画面消灯は含めない。画面が消えていても接続と観測は続いている。
+	//
+	// 例外は補完されたロック (Recovered)。収集の異常終了後の起動が
+	// 「最後に生きていた時刻」として書くもので、そこから先の観測は無い。
+	// これを切れ目にしないと、クラッシュや電源断で marker が書かれないまま
+	// 再起動し、電源が入っていなかった時間まで接続区間がつながってしまう
+	// (再起動後の最初の観測は既存の開区間に吸収されるため)。
 	var observationEnds []stateChange
 	for _, event := range filterType(events, rawlog.EventSession) {
 		payload, err := rawlog.DecodePayload[rawlog.SessionPayload](event)
 		if err != nil {
 			return nil, nil, err
 		}
+		isEnd := false
 		switch payload.Action {
 		case rawlog.SessionSuspend, rawlog.SessionShutdown, rawlog.SessionCollectorStop:
+			isEnd = true
+		default:
+			isEnd = payload.Recovered
+		}
+		if isEnd {
 			observationEnds = append(observationEnds, stateChange{
 				connected: false,
 				at:        event.StartTime,

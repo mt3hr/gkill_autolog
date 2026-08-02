@@ -831,6 +831,33 @@ func TestConnectionSurvivesLockAndScreenOff(t *testing.T) {
 	}
 }
 
+func TestConnectionClosesAtRecoveredLock(t *testing.T) {
+	// 補完されたロック (Recovered) は「収集がそこで死んでいた」ことを表す。
+	// クラッシュや電源断では suspend などの切れ目が書かれないので、
+	// これを切れ目にしないと、電源が入っていなかった時間と再起動後の観測が
+	// 1本の接続区間につながってしまう。
+	result := runNormalize(t, []*rawlog.Event{
+		wifiEvent(t, "w1", 0, "TestWifi", true),
+		// 収集がクラッシュ。次回起動が最終入力時刻 (30分) に lock を補う。
+		event(t, "s1", rawlog.EventSession, 30*min, nil,
+			rawlog.SessionPayload{Action: rawlog.SessionLock, Recovered: true}),
+		// 再起動後の初回ポーリングが「つながっているもの」を記録し直す。
+		wifiEvent(t, "w2", 90*min, "TestWifi", true),
+		wifiEvent(t, "w3", 100*min, "TestWifi", false),
+	}, 240*min)
+
+	wifi := proposalsBySource(result, SourceWifi)
+	if len(wifi) != 2 {
+		t.Fatalf("件数 = %d, want 2 (死んでいた時間で区間が分かれる) (%+v)", len(wifi), describeProposals(wifi))
+	}
+	if end := wifi[0].EndTime.Sub(base()); end != 30*min {
+		t.Errorf("1本目の終了 = %v, want %v (補完ロックで閉じる)", end, 30*min)
+	}
+	if start := wifi[1].StartTime.Sub(base()); start != 90*min {
+		t.Errorf("2本目の開始 = %v, want %v", start, 90*min)
+	}
+}
+
 func TestConnectionRestartsAfterResume(t *testing.T) {
 	// 復帰後は収集側がつながっているものを記録し直し、新しい区間が始まる。
 	// 眠っていた時間は接続として記録しない。
