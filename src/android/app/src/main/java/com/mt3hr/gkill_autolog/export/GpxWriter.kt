@@ -15,7 +15,7 @@ import java.util.TimeZone
  * 記録した位置情報を GPX として共有ストレージへ書き出す。
  *
  * 出力は /sdcard/gkill_autolog/gpslog/YYYYMMDD.gpx。
- * そこから先へ運ぶのは termux-tasker の dvnf.sh の役目で、
+ * そこから先へ運ぶのは同期スクリプト (gkill_server dvnf) の役目で、
  * GPSLogs_<端末>_<日付>/ にまとめられ、gkill が gpslog rep として読む。
  *
  * **ファイル名は YYYYMMDD.gpx でなければならない。**

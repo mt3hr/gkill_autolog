@@ -1,8 +1,9 @@
 // Package normalize は生ログを Kyou の提案へ変換する。
 //
-// ここに入るのは決定的なルール処理だけで、Claude は通さない。
+// ここに入るのは決定的なルール処理だけで、LLM は通さない。
 // セッション化・結合・閾値・集計をすべてコードで行い、
-// Claude には「この URL を URLog として残すか」の2値判定だけを任せる。
+// 何を残すかは閾値と除外リストだけで決める。
+// 同じ生ログからは、何度実行しても同じ提案が出る。
 //
 // 判定基準を1か所に集めるため、Chrome 拡張や収集プログラムの側では絞り込みをしない。
 package normalize
@@ -28,8 +29,8 @@ const (
 
 // 収集元を表すタグ。
 //
-// gkill Write MCP は書き込み先 Repository を指定できないため、
-// 端末と収集元の識別はタグで行う（docs/design-decisions.md §1）。
+// Kyou に付くタグはこの1つだけ。端末名はタグではなく create_device に入る
+// （書き分けは端末別ユーザーで行う。documents/reverse/design-philosophy.md 参照）。
 const (
 	SourceWindow       = "autolog_window"
 	SourceDevice       = "autolog_device"
@@ -103,9 +104,11 @@ type Proposal struct {
 	RelatedTime *time.Time `json:"related_time,omitempty"`
 }
 
-// URLCandidate は Claude に残すかどうかを判定してもらう URLog 候補。
+// URLCandidate は URLog にした閲覧区間の一覧。
 //
-// Claude はページの意味を要約せず、URLog として残す必要があるかだけを判定する。
+// 取捨は browserViews の中で除外リストと閾値によって済んでいるので、
+// 取り込みの経路では使っていない。何がどれだけ URLog になったかを
+// 外から確かめたいときのために残してある。
 type URLCandidate struct {
 	ProposalID      string `json:"proposal_id"`
 	URL             string `json:"url"`
@@ -150,8 +153,8 @@ func (o Options) usageTitle() string {
 type Result struct {
 	// Proposals は書き込み内容が確定した提案。
 	Proposals []Proposal
-	// URLCandidates は Claude の判定を待つ URLog 候補。
-	// 対応する Proposal は Proposals にも入っており、判定で捨てられたものだけ書き込まない。
+	// URLCandidates は URLog にした閲覧区間の一覧。
+	// 対応する Proposal は Proposals にも入っているので、取り込みではこちらを使わない。
 	URLCandidates []URLCandidate
 	// OpenStates は Cutoff 時点でまだ確定していない区間。
 	// 呼び出し側が保存し、次回の Options.OpenStates として渡す。

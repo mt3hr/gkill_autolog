@@ -1,6 +1,6 @@
-// Package shot は毎時のスクリーンショットを撮って保存する。
+// Package shot は決まった間隔でスクリーンショットを撮って保存する。
 //
-// 撮った画像は Claude へ渡さない。保存先を gkill の IDF リポジトリとして
+// autolog がやるのは撮って置くところまで。保存先を gkill の IDF リポジトリとして
 // 取り込ませることで Kyou になる（要件 §10）。
 //
 // gkill の IDF は登録時のファイル mtime を RelatedTime にするため、

@@ -18,8 +18,7 @@ PowerShell スクリプトで構成される。MIT ライセンス。
 | コマンド | 用途 |
 | --- | --- |
 | `npm run build` | Windows 向けにビルド（`release/windows_amd64/autolog.exe` を出す） |
-| `npm run build_android_arm64` | Android (arm64) 向けにビルドのみ |
-| `npm run deploy_android` | Android (arm64) 向けにビルドして配布 |
+| `npm run build_android_arm64` | Android (arm64) 向けにビルド |
 | `npm run build_android_apk` | 収集アプリの APK を作る |
 | `npm run release` | 全プラットフォーム向けにビルドして成果物を検査 |
 | `cd src\autolog && go test ./...` | Go のテスト |
@@ -40,6 +39,7 @@ src/
   android/     Android 収集アプリ (com.mt3hr.gkill_autolog)
   chrome_ext/  Chrome 拡張 (Manifest V3)
   scripts/     PowerShell スクリプト
+  tools/       ビルドの小物（Node。npm スクリプトから呼ばれる）
 documents/
   reverse/     設計資料
 ```
@@ -72,8 +72,9 @@ gkill 本体と同じく、実装は `src/` の下、資料は `documents/revers
 詳細は `documents/reverse/design-philosophy.md`。
 
 - **観測できた事実だけを記録する。** 目的・感情・集中状態を推測しない。要約しない
-- **判断は決定的なルールで行う。** LLM に取捨を任せない。除外は `url_denylist.txt` と
-  `notification_denylist.txt` のみ
+- **判断は決定的なルールで行う。** LLM に取捨を任せない。利用者による除外は
+  `url_denylist.txt` と `notification_denylist.txt` のみ（要件で決まっている固定の取捨、
+  たとえばブラウザ内部ページや YouTube 系の閲覧の除外は normalize のコードにある）
 - **生ログは消さない。** 追記専用。`(端末, event_id)` で一意なので再取り込みが安全
 - **失敗は記録せず次回やり直す。** 台帳には成功した分だけ載せる
 - **端末名・利用者名をコードに書かない。** 既定値も置かない。設定で決める

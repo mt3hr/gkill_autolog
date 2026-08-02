@@ -21,7 +21,8 @@
 | [`autolog/`](autolog/) | Go の CLI。収集と取り込み。`go.mod` はここ |
 | [`android/`](android/) | Android の収集アプリ。集めて共有ストレージへ書き出すだけ |
 | [`chrome_ext/`](chrome_ext/) | Chrome 拡張 (Manifest V3)。閲覧と再生を送る |
-| [`scripts/`](scripts/) | PowerShell スクリプト。ビルド・設定・取り込みの起動 |
+| [`scripts/`](scripts/) | PowerShell スクリプト。設定・取り込みの起動・切り分け |
+| [`tools/`](tools/) | ビルドの小物 (Node)。npm スクリプトから呼ばれる |
 
 ## autolog のパッケージ
 
