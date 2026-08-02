@@ -17,14 +17,19 @@ if (-not $EnvFile) { $EnvFile = Join-Path $PSScriptRoot 'autolog.env' }
 
 $settings = Read-GkillEnvFile $EnvFile
 
-$base = $settings['GKILL_BASE_URL']
-$user = $settings['GKILL_USER']
-$pw = $settings['GKILL_PASSWORD_SHA256']
-$insecure = $settings['GKILL_INSECURE'] -in @('true', '1', 'yes', 'on')
+# 実環境変数 → autolog.env の順で見る (Go 側と同じ)。
+$base = Get-GkillSetting $settings 'GKILL_BASE_URL'
+$user = Get-GkillSetting $settings 'GKILL_USER'
+$pw = Get-GkillSetting $settings 'GKILL_PASSWORD_SHA256'
+
+if (-not $base) {
+    Write-Host 'GKILL_BASE_URL が未設定です。autolog.env に接続先を書いてください。'
+    exit 1
+}
 
 Write-Host ("PowerShell: {0}" -f $PSVersionTable.PSVersion)
 Write-Host "接続先:     $base"
-if ($insecure) {
+if (Test-GkillInsecure $settings) {
     Write-Host 'TLS:        証明書の検証を省略 (GKILL_INSECURE)'
     Enable-GkillInsecureTls
 }
@@ -60,8 +65,8 @@ if ($user) {
 }
 
 # 取り込みの書き込み先は端末別ユーザー。実際に使うのはこちらなので必ず確かめる。
-$prefix = $settings['GKILL_AUTO_USER_PREFIX']
-$autoPw = $settings['GKILL_AUTO_PASSWORD_SHA256']
+$prefix = Get-GkillSetting $settings 'GKILL_AUTO_USER_PREFIX'
+$autoPw = Get-GkillSetting $settings 'GKILL_AUTO_PASSWORD_SHA256'
 
 if (-not $prefix) {
     Write-Host ''

@@ -50,7 +50,11 @@ if (Test-Path $EnvFile) {
     # 日本語コメントの直後の行が黙って読み落とされる。
     $settings = Read-GkillEnvFile $EnvFile
     foreach ($key in $settings.Keys) {
-        Set-Item -Path "env:$key" -Value $settings[$key]
+        # 実環境変数が既にあればそちらを優先する (Go 側 config.Load と同じ順)。
+        # ここで上書きすると、環境変数で運用している構成だけ挙動が変わってしまう。
+        if (-not [Environment]::GetEnvironmentVariable($key)) {
+            Set-Item -Path "env:$key" -Value $settings[$key]
+        }
     }
 } else {
     Write-Warning "設定ファイルが無い: $EnvFile"
