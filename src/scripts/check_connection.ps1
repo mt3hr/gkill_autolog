@@ -88,12 +88,28 @@ if (-not $devices) {
     Write-Host '確認する端末が決まりません。AUTOLOG_DEVICE を設定してください。'
     exit 1
 }
+
+# ログインは IP ごとに15分で10回まで。成功した試行も数えられるので、
+# 端末が多い構成ではこの確認だけで上限に近づく。先に消費量を知らせる。
+if ($devices.Count -ge 8) {
+    Write-Host "注意: この確認はログインを $($devices.Count) 回使います (gkill の上限は IP ごとに15分で10回)。"
+    Write-Host '      直後に取り込みを動かす予定があるなら、AUTOLOG_ALLOWED_DEVICES を絞ってください。'
+    Write-Host ''
+}
+
 $failed = @()
 foreach ($device in $devices) {
     $autoUser = "$prefix$device"
     try {
         $check = Invoke-GkillApi $base '/api/login' @{
             user_id = $autoUser; password_sha256 = $autoPw; locale_name = 'ja'
+        }
+        if (Test-GkillRateLimited $check) {
+            Write-Host ''
+            Write-Host 'ログイン試行の回数制限に当たりました (IP ごとに15分で10回、成功も数えられます)。'
+            Write-Host '残りの端末の確認を中止します。続けると取り込みの分まで使い潰します。'
+            Write-Host '15分ほど待ってからやり直してください。'
+            exit 1
         }
         if ($check.session_id) {
             $autoReps = Invoke-GkillApi $base '/api/get_all_rep_names' @{
