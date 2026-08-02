@@ -215,21 +215,24 @@ func Run(events []*rawlog.Event, opts Options) (*Result, error) {
 		result.Proposals = append(result.Proposals, usageProposals...)
 		result.limitCursor(usageCursor)
 
-		browserProposals, candidates, err := browserViews(device, deviceEvents, opts.DenyList)
-		if err != nil {
-			return nil, err
-		}
-		result.Proposals = append(result.Proposals, browserProposals...)
-		result.URLCandidates = append(result.URLCandidates, candidates...)
-
 		// 再生とアプリ利用の末尾は、次のバッチの先頭と結合されるかもしれない。
 		// カーソルは引き戻さず、末尾の区間だけを Result で持ち越して次回にまとめる。
-		mediaProposals, mediaPending, err := mediaPlays(device, deviceEvents, opts, opts.OpenStates)
+		//
+		// 閲覧区間より先に処理する。同じURLを再生として URLog にしたかどうかを
+		// browserViews へ渡し、閲覧側の URLog を落とすため。
+		mediaProposals, mediaURLs, mediaPending, err := mediaPlays(device, deviceEvents, opts, opts.OpenStates)
 		if err != nil {
 			return nil, err
 		}
 		result.Proposals = append(result.Proposals, mediaProposals...)
 		result.OpenStates = append(result.OpenStates, mediaPending...)
+
+		browserProposals, candidates, err := browserViews(device, deviceEvents, opts.DenyList, mediaURLs)
+		if err != nil {
+			return nil, err
+		}
+		result.Proposals = append(result.Proposals, browserProposals...)
+		result.URLCandidates = append(result.URLCandidates, candidates...)
 
 		appProposals, appPending, err := appUsages(device, deviceEvents, opts, opts.OpenStates)
 		if err != nil {

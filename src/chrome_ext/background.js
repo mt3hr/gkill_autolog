@@ -3,7 +3,7 @@
 // 役割は2つ。
 //   1. いま見えているタブ（フォーカスされたウィンドウのアクティブタブ）の
 //      閲覧区間を browser_view イベントとして記録する。
-//   2. content_youtube.js から届く再生実績を media_play イベントとして記録する。
+//   2. content_media.js から届く再生実績を media_play イベントとして記録する。
 //
 // MV3 の Service Worker はいつでも停止されるため、状態とキューは
 // すべて chrome.storage へ置き、メモリ上には持たない。
@@ -236,7 +236,7 @@ chrome.windows.onFocusChanged.addListener(() => {
 
 // ---------------------------------------------------------------- 再生実績
 
-// content_youtube.js は再生中 10 秒ごとに途中経過を送ってくる。
+// content_media.js は再生中 10 秒ごとに途中経過を送ってくる。
 // タブが突然閉じられて最後の報告が届かなくても、直前の報告までは残る。
 //
 // 報告は playId ごとに上書きし、更新が途切れたものを心拍のたびに確定させる。
@@ -250,9 +250,12 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 });
 
 async function recordProgress(message) {
-  // URL や動画IDを取得できなかった再生は記録しない。
+  // URL を取得できなかった再生は記録しない。
   // 検索URLや推測したURLを作ってはならない（要件 §8.2）。
-  if (!message.url || !message.videoId || !message.playId) {
+  //
+  // 動画IDは YouTube 系でしか取れないので条件にしない。
+  // 他のサイトでは開いていたページのURLがそのまま入る。
+  if (!message.url || !message.playId) {
     return;
   }
 
@@ -301,7 +304,8 @@ async function finalizePlays(now) {
       payload: {
         service: play.service,
         url: play.url,
-        video_id: play.videoId,
+        // 動画IDは YouTube 系でしか取れない。無いときは項目ごと落とす。
+        video_id: play.videoId || undefined,
         title: play.title,
         artist: play.artist,
         // 一時停止時間と広告再生時間を含めない実再生秒数。

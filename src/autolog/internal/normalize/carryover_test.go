@@ -123,6 +123,10 @@ func splitConsistencyEvents(t *testing.T) []*rawlog.Event {
 		mediaEventNoURL(t, "m1", 0, 40*sec, 40, "曲名", "アーティスト"),
 		mediaEventNoURL(t, "m2", 50*sec, 90*sec, 40, "曲名", "アーティスト"),
 
+		// メディア再生 (URLあり): URLog は再生の都度、TimeIs は結合して1本。
+		mediaEvent(t, "m3", 0, 40, "https://www.youtube.com/watch?v=abc"),
+		mediaEvent(t, "m4", 50*sec, 40, "https://www.youtube.com/watch?v=abc"),
+
 		// 通知: 同じ内容が2分後に再通知される。重複排除の窓は5分。
 		androidEvent(t, "n1", rawlog.EventNotification, 10*sec, nil,
 			rawlog.NotificationPayload{AppLabel: "Gmail", PackageName: "com.google.android.gm", Title: "件名", Body: "本文"}),

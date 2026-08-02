@@ -61,8 +61,8 @@ gkill 本体の用語は [gkill の用語集](https://github.com/mt3hr/gkill/blo
 | `autolog_device` | TimeIs | 端末そのものの利用（ロック解除〜ロック） |
 | `autolog_window` | TimeIs | 前面ウィンドウ（Windows）／前面アプリ（Android） |
 | `autolog_browser` | URLog | ブラウザでのページ閲覧 |
-| `autolog_media` | URLog | 動画・音楽の再生（URL が分かるとき） |
-| `autolog_media` | TimeIs | 動画・音楽の再生（URL が分からないとき） |
+| `autolog_media` | TimeIs | 動画・音楽の再生（常に作る） |
+| `autolog_media` | URLog | 動画・音楽の再生（URL が分かるときだけ追加で作る） |
 | `autolog_wifi` | TimeIs | Wi-Fi の接続 |
 | `autolog_bluetooth` | TimeIs | Bluetooth 機器の接続 |
 | `autolog_charge` | TimeIs | 充電 |
@@ -71,7 +71,8 @@ gkill 本体の用語は [gkill の用語集](https://github.com/mt3hr/gkill/blo
 Dnote で絞るときは、タグだけでは URLog と TimeIs を区別できない行があるため、
 `TagEqualPredicate` と `DataTypePrefixPredicate` を組み合わせます。
 
-**YouTube と YouTube Music は区別しません。** どちらも `autolog_media` です。
+**再生元のサービスやアプリは区別しません。** YouTube も YouTube Music も
+他のサイト・アプリも、すべて `autolog_media` です。
 サービス別のタグは付けないので、Dnote で動画と音楽を分けて集計することはできません。
 
 **既に書き込んだ Kyou に後からタグは付きません。** 台帳が「書き込み済み」として
@@ -123,8 +124,8 @@ Kmemo にしない通知のパターンを書くファイル (`notification_deny
 | 観測したこと | gkill での記録 |
 | --- | --- |
 | 端末の利用、ウィンドウ操作、アプリ利用、Wi-Fi、Bluetooth、充電 | TimeIs（時間区間） |
+| 動画・音楽の再生 | TimeIs（曲名・動画名を Title に） |
 | ページ閲覧、動画・音楽の再生（URLが分かるとき） | URLog（ブックマーク） |
-| 動画・音楽の再生（URLが分からないとき） | TimeIs（曲名・動画名を Title に） |
 | 通知 | Kmemo（テキスト） |
 | スクリーンショット | IDF（ファイル） |
 | 位置情報 | GPX（gpslog rep として読まれる。Kyou にはならない） |
