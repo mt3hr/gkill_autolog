@@ -76,6 +76,17 @@ class AutologService : Service() {
     /** 直前に Chrome 履歴を読んだ時刻。 */
     private var lastChromeCollectAt: Long = 0
 
+    /**
+     * 収集ループが動いているか。
+     *
+     * ACTION_RELOAD_SETTINGS の Intent は「動いているサービスの設定を入れ替える」
+     * つもりのものだが、届く直前にサービスが死んでいると、この Intent で
+     * サービスが**新規に**生成される。そのとき設定の入れ替えだけで戻ると、
+     * tick も ExportWorker も始まらない「何も収集しない常駐」ができてしまう。
+     * 動いていない状態で受けたら、普通の開始として扱うための目印。
+     */
+    private var collecting = false
+
     private lateinit var systemEvents: SystemEventCollector
     private lateinit var appUsage: AppUsageCollector
     private lateinit var media: MediaCollector
@@ -117,7 +128,10 @@ class AutologService : Service() {
         }
 
         // 設定が変わっただけのときは、収集開始として記録し直さない。
-        if (intent?.action == ACTION_RELOAD_SETTINGS) {
+        // ただし収集ループがまだ動いていない (この Intent でサービスが新規に
+        // 生成された) 場合は、普通の開始として扱う。設定の入れ替えだけで戻ると、
+        // 何も収集しないフォアグラウンドサービスが残り続ける。
+        if (intent?.action == ACTION_RELOAD_SETTINGS && collecting) {
             location.restart()
             return START_STICKY
         }
@@ -135,6 +149,7 @@ class AutologService : Service() {
 
         handler.removeCallbacks(tick)
         handler.post(tick)
+        collecting = true
 
         // 強制終了されても再開させる。
         return START_STICKY
@@ -142,6 +157,7 @@ class AutologService : Service() {
 
     override fun onDestroy() {
         handler.removeCallbacks(tick)
+        collecting = false
         systemEvents.stop()
         location.stop()
         media.flush()

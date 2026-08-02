@@ -12,6 +12,7 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.concurrent.TimeUnit
 
 /**
  * 決まった間隔でスクリーンショットを撮る。
@@ -194,9 +195,23 @@ class ScreenshotCollector(
         return "${config.device}_$stamp.webp"
     }
 
+    /**
+     * root でコマンドを実行する。
+     *
+     * su マネージャが確認ダイアログを出す設定だと待ちが終わらないことがある。
+     * 撮影は単一の ioExecutor で動くため、ここで無期限に待つと
+     * JSONL の書き出し・GPX・Chrome 履歴の収集まで全部が止まる。
+     * ChromeHistoryCollector と同じ上限で打ち切り、失敗として次回に任せる。
+     */
     private fun runAsRoot(command: String): Boolean = try {
         val process = ProcessBuilder("su", "-c", command).redirectErrorStream(true).start()
-        process.waitFor() == 0
+        if (!process.waitFor(ROOT_COMMAND_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+            process.destroyForcibly()
+            Log.w(TAG, "root コマンドが時間内に終わらなかったため打ち切った")
+            false
+        } else {
+            process.exitValue() == 0
+        }
     } catch (e: Exception) {
         Log.w(TAG, "root コマンドを実行できなかった", e)
         false
@@ -205,5 +220,8 @@ class ScreenshotCollector(
     companion object {
         private const val TAG = "AutologScreenshot"
         private const val MINUTE_MS = 60 * 1000L
+
+        /** root コマンドの待ち時間の上限（秒）。ChromeHistoryCollector と揃えてある。 */
+        private const val ROOT_COMMAND_TIMEOUT_SECONDS = 15L
     }
 }
