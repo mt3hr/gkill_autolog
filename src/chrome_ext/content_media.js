@@ -45,6 +45,13 @@
   let play = null;
   let lastTickAt = Date.now();
 
+  // MEDIA_LOST_GRACE_TICKS は計測対象が見えなくなってから確定を待つ tick 数。
+  //
+  // SPA がプレイヤーを差し替える瞬間、<video> が一時的に DOM から消えたり
+  // 長さ不明になったりする。即座に確定すると1本の視聴が分断される。
+  const MEDIA_LOST_GRACE_TICKS = 3;
+  let mediaLostTicks = 0;
+
   // youtubeVideoId は URL から動画IDを取り出す。取れなければ null。
   // Shorts は `?v=` を持たず、パスに動画IDが入っている。
   function youtubeVideoId() {
@@ -277,16 +284,38 @@
     const media = findMedia();
 
     if (!media) {
-      // 数える対象が無くなった。一覧やホームへ戻った場合もここ。
-      if (play) {
-        report(true);
-        play = null;
+      if (!play) {
+        // 再生の無いページで毎秒 DOM を走査し続けない。
+        // 次に再生が始まれば play イベントで動き出す。
+        stopTicker();
+        return;
       }
-      // 再生の無いページで毎秒 DOM を走査し続けない。
-      // 次に再生が始まれば play イベントで動き出す。
+      // 計測対象が見えなくなっても、すぐには確定しない。
+      //
+      // YouTube は広告を同じ <video> 要素で再生し、その間は要素の duration が
+      // 広告の長さになる。30秒未満の広告 (スキップ可能広告の大半) では
+      // isCountable が要素ごと落とすため「対象なし」に見えるが、
+      // ここで確定すると1本の視聴が広告のたびに分断され、
+      // 同じ動画の URLog が広告の数だけできてしまう。
+      // 広告の表示中は何 tick でも待つ。広告の再生時間はもともと数えない。
+      if (isAdShowing()) {
+        mediaLostTicks = 0;
+        return;
+      }
+      // 広告でもないのに消えた。SPA の差し替えの瞬間かもしれないので
+      // 数 tick だけ様子を見て、それでも戻らなければ確定する。
+      // 一覧やホームへ戻った場合もここを通り、数秒遅れて確定する。
+      mediaLostTicks++;
+      if (mediaLostTicks < MEDIA_LOST_GRACE_TICKS) {
+        return;
+      }
+      report(true);
+      play = null;
+      mediaLostTicks = 0;
       stopTicker();
       return;
     }
+    mediaLostTicks = 0;
 
     // 動画IDは URL から取り、取れなければ MediaSession のサムネイルから取る。
     // ミニプレイヤーや YouTube Music のライブラリ表示中は URL に `?v=` が付かない。
