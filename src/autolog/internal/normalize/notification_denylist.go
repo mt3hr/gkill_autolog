@@ -41,6 +41,10 @@ const DefaultNotificationDenyList = `# Kmemo にしない通知のパターン
 # downloads のような短い語なので、部分一致で書かず
 # re:(?i)^downloads$ のように前後を留めた正規表現で書くこと。
 # そうしないとアプリ名やパッケージ名の一部にも当たる。
+#
+# 端末に登録されている値は adb でも一覧できる。
+#   adb shell dumpsys notification --noredact
+# AppSettings: <パッケージ名> の下に NotificationChannel{mId='...'} が並ぶ。
 
 # --- 自動化ツールの通知 ---
 # 同期スクリプトやタスクの実行結果。自分で仕込んだ処理が動いた副産物なので残さない。
@@ -54,9 +58,16 @@ net.dinglisch.android.taskerm
 com.android.providers.downloads
 # Chrome のように他の通知も出すアプリは、チャンネルIDで
 # ダウンロードの分だけを落とす。アプリ名がちょうど Downloads のものにも当たる。
-re:(?i)^downloads$
+#
+# Chrome はダウンロードのチャンネルを2つ持っている。
+# 進行中が downloads で、「ダウンロードが完了しました」は completed_downloads。
+# 残る意味がないのは後者なので、completed_ が付く方を必ず含めること
+# (Pixel 9a / Galaxy Tab S11 の dumpsys notification で確認)。
+re:(?i)^(completed_)?downloads$
 # 端末によっては「ファイル」からも出る。うるさければ # を外す。
 #com.google.android.documentsui
+# Samsung Internet のダウンロード。使っていれば # を外す。
+#re:(?i)^SBROWSER_DOWNLOADS_NOTIFICATION_CHANNEL$
 
 # --- システムの通知 ---
 # 端末によって出方が違うので既定では有効にしない。うるさければ # を外す。

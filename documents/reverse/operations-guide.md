@@ -334,9 +334,24 @@ SELECT json_extract(payload,'$.package_name'),
  GROUP BY 1,2,3;
 ```
 
+生ログに出るのは実際に届いた通知の分だけです。
+アプリが持っているチャンネルを網羅して見たいときは端末側で調べます。
+
+```sh
+adb shell dumpsys notification --noredact
+```
+
+`AppSettings: <パッケージ名>` の下に `NotificationChannel{mId='...'}` が並びます。
+
 チャンネルIDは `downloads` のような短い語なので、部分一致では書かず
 `re:(?i)^downloads$` のように前後を留めた正規表現で書いてください。
 部分一致だとアプリ名やパッケージ名の一部にも当たります。
+
+前後を留めるぶん、**似た名前の別チャンネルは当たりません**。
+Chrome はダウンロードのチャンネルを2つ持っていて、進行中が `downloads`、
+「ダウンロードが完了しました」は `completed_downloads` です。
+残る意味がないのは後者なので、既定では
+`re:(?i)^(completed_)?downloads$` と書いて両方に当てています。
 
 自動化ツールの通知とダウンロードの通知は既定で落ちるようにしてあります。
 

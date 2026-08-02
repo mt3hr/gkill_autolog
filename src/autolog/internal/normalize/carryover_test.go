@@ -408,20 +408,39 @@ func TestDefaultNotificationDenyListExcludesDownloads(t *testing.T) {
 		}
 	}
 	// 他の通知も出すアプリはチャンネルIDで落とす。
-	for _, channelID := range []string{"downloads", "Downloads"} {
+	// Chrome は進行中が downloads、完了が completed_downloads。
+	// 実際に届くのは完了の方なので、こちらが落ちないと意味がない。
+	for _, channelID := range []string{
+		"downloads",
+		"Downloads",
+		"completed_downloads",
+		"Completed_Downloads",
+	} {
 		if !list.Matches(channelID) {
 			t.Errorf("チャンネルID %s が既定の除外リストに当たらない", channelID)
 		}
 	}
 	// Chrome そのものは落とさない。ダウンロード以外の通知は残す。
-	for _, value := range []string{"com.android.chrome", "Chrome", "sites"} {
+	// browser / media は Chrome の他のチャンネルID。
+	for _, value := range []string{
+		"com.android.chrome",
+		"Chrome",
+		"sites",
+		"browser",
+		"media",
+	} {
 		if list.Matches(value) {
 			t.Errorf("%s まで既定の除外リストに当たっている", value)
 		}
 	}
 	// コメントアウトしてある行は効かない。
-	if list.Matches("com.google.android.documentsui") {
-		t.Error("コメント行が有効になっている")
+	for _, value := range []string{
+		"com.google.android.documentsui",
+		"SBROWSER_DOWNLOADS_NOTIFICATION_CHANNEL",
+	} {
+		if list.Matches(value) {
+			t.Errorf("コメント行 %s が有効になっている", value)
+		}
 	}
 }
 
