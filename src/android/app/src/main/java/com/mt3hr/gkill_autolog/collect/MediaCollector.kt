@@ -6,6 +6,7 @@ import android.content.pm.PackageManager
 import android.media.session.MediaController
 import android.media.session.MediaSessionManager
 import android.media.session.PlaybackState
+import android.util.Log
 import com.mt3hr.gkill_autolog.model.Event
 import com.mt3hr.gkill_autolog.model.EventType
 import com.mt3hr.gkill_autolog.store.EventStore
@@ -45,6 +46,22 @@ class MediaCollector(
     /** 計測中の再生。パッケージ名ごとに1つ。 */
     private val playing = mutableMapOf<String, PlayState>()
 
+    /**
+     * 計測途中の再生の控え。
+     *
+     * 計測はメモリ上で行い、確定 (finish) まで EventStore へ書かないため、
+     * プロセスが突然死ぬと (クラッシュ・強制終了・システムによる kill)
+     * そこまでの再生時間が丸ごと消えていた。画面を消して聴く音楽は
+     * 1本が長く、失う量も大きい。tick のたびにここへ控えておき、
+     * 次の起動時に「控えの時点で終わった再生」として確定させる。
+     */
+    private val checkpoint =
+        context.getSharedPreferences(CHECKPOINT_PREFS, Context.MODE_PRIVATE)
+
+    init {
+        recoverFromCheckpoint()
+    }
+
     private data class PlayState(
         val title: String,
         val artist: String,
@@ -83,6 +100,8 @@ class MediaCollector(
                 finish(packageName, now)
             }
         }
+
+        saveCheckpoint()
     }
 
     /** 計測中のものをすべて確定させる。サービス停止時に呼ぶ。 */
@@ -90,6 +109,78 @@ class MediaCollector(
         for (packageName in playing.keys.toList()) {
             finish(packageName, now)
         }
+        saveCheckpoint()
+    }
+
+    /**
+     * 前回のプロセスが計測途中で死んでいたら、控えの時点で終わった再生として確定させる。
+     *
+     * event_id を (開始時刻, パッケージ名) から決めるので、確定の途中でまた死んで
+     * 二度実行されても、(端末, event_id) の重複排除で1件に畳まれる。
+     */
+    private fun recoverFromCheckpoint() {
+        val raw = checkpoint.getString(CHECKPOINT_KEY, null) ?: return
+        try {
+            val snapshot = JSONObject(raw)
+            for (packageName in snapshot.keys()) {
+                val item = snapshot.getJSONObject(packageName)
+                val playedMillis = item.optLong("played_millis")
+                val title = item.optString("title")
+                val startedAt = item.optLong("started_at")
+                val endedAt = item.optLong("last_tick_at")
+                if (playedMillis <= 0 || title.isBlank() || endedAt <= startedAt) continue
+
+                val service = item.optString("service")
+                val payload = JSONObject()
+                    .put("service", service)
+                    .put("title", title)
+                    .put("artist", item.optString("artist"))
+                    .put("app_label", item.optString("app_label"))
+                    .put("played_seconds", playedMillis / 1000.0)
+                val videoId = item.optString("video_id")
+                if (videoId.isNotEmpty()) {
+                    payload.put("video_id", videoId)
+                    payload.put("url", watchUrl(service, videoId))
+                }
+
+                store.put(
+                    Event.interval(
+                        EventType.MEDIA_PLAY, startedAt, endedAt, payload,
+                        eventId = "media_play:recovered:$startedAt:$packageName",
+                    )
+                )
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "計測途中だった再生の控えを読めなかった", e)
+        }
+        checkpoint.edit().remove(CHECKPOINT_KEY).apply()
+    }
+
+    /** 計測中の再生を控えに書く。何も計測していなければ控えを消す。 */
+    private fun saveCheckpoint() {
+        val snapshot = JSONObject()
+        for ((packageName, state) in playing) {
+            if (state.playedMillis <= 0) continue
+            snapshot.put(
+                packageName,
+                JSONObject()
+                    .put("title", state.title)
+                    .put("artist", state.artist)
+                    .put("service", state.service)
+                    .put("app_label", state.appLabel)
+                    .put("video_id", state.videoId)
+                    .put("started_at", state.startedAt)
+                    .put("played_millis", state.playedMillis)
+                    .put("last_tick_at", state.lastTickAt)
+            )
+        }
+        if (snapshot.length() == 0) {
+            if (checkpoint.contains(CHECKPOINT_KEY)) {
+                checkpoint.edit().remove(CHECKPOINT_KEY).apply()
+            }
+            return
+        }
+        checkpoint.edit().putString(CHECKPOINT_KEY, snapshot.toString()).apply()
     }
 
     private fun update(controller: MediaController, service: String, now: Long) {
@@ -185,6 +276,11 @@ class MediaCollector(
     }
 
     companion object {
+        private const val TAG = "AutologMedia"
+
+        private const val CHECKPOINT_PREFS = "media_checkpoint"
+        private const val CHECKPOINT_KEY = "playing"
+
         private const val PACKAGE_YOUTUBE = "com.google.android.youtube"
         private const val PACKAGE_YOUTUBE_MUSIC = "com.google.android.apps.youtube.music"
 
