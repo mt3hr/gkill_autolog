@@ -34,10 +34,28 @@ type netPowerCollector struct {
 
 	// wifiPermissionWarned は位置情報の許可が無い旨の警告を一度だけ出すためのフラグ。
 	wifiPermissionWarned bool
+
+	// reobserve に入ると、次の観測は差分ではなく取り直しになる。スリープ復帰用。
+	reobserve chan struct{}
 }
 
 func newNetPowerCollector(emitter *Emitter, logger *slog.Logger) *netPowerCollector {
-	return &netPowerCollector{emitter: emitter, logger: logger}
+	return &netPowerCollector{emitter: emitter, logger: logger, reobserve: make(chan struct{}, 1)}
+}
+
+// requestReobserve は接続状態の取り直しを求める。どのゴルーチンから呼んでもよい。
+//
+// suspend の時点で normalize が接続区間を閉じるため、復帰後に
+// 「いまつながっているもの」を接続開始として記録し直さないと、
+// 状態が変わっていない機器の接続がいつまでも記録されない。
+// ポーリングの間隔から自前で検知もしている (sleepGapThreshold) が、
+// それより短いスリープはここでしか拾えない。
+func (c *netPowerCollector) requestReobserve() {
+	select {
+	case c.reobserve <- struct{}{}:
+	default:
+		// 既に取り直しが予約されている。1回で足りる。
+	}
 }
 
 func (c *netPowerCollector) run(ctx context.Context) error {
@@ -134,6 +152,14 @@ func (c *netPowerCollector) run(ctx context.Context) error {
 			return nil
 		case now := <-ticker.C:
 			poll(now)
+		case <-c.reobserve:
+			// スリープ復帰。眠っている間の状態は観測できていないので、
+			// 差分ではなく取り直す。
+			if initialized {
+				c.logger.Info("復帰したため接続状態を取り直す")
+				initialized = false
+			}
+			poll(time.Now())
 		}
 	}
 }

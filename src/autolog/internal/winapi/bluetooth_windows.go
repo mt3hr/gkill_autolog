@@ -133,7 +133,10 @@ func ConnectedBluetoothDevices() ([]string, error) {
 			if errno, isErrno := callErr.(windows.Errno); isErrno && errno == errorNoMoreItems {
 				break
 			}
-			break
+			// 列挙が途中で失敗した。部分的な一覧を「観測できた」として返すと、
+			// 残りの機器が偽の切断になる。エラーとして返して呼び出し側に
+			// 前回の状態を維持させる。
+			return nil, fmt.Errorf("failed to enumerate bluetooth device %d: %w", index, callErr)
 		}
 
 		// 相手側の機器だけを対象にする。アドレスが無いものはアダプタや疑似デバイス。
