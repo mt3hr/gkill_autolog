@@ -439,6 +439,8 @@ root権限でChromeの履歴DBを読み取り、アプリ利用ログと照合�
 Windowsと同じく、30秒以上の連続閲覧をURLog候補とする。
 
 履歴DBに存在するだけで前面表示を確認できないページは、原則として自動登録しない。
+サブフレーム（広告iframe等）の自動読み込み（transition の AUTO_SUBFRAME）と、
+Chromeが一覧に出さない印を付けたURL（urls.hidden）も閲覧ではないので登録しない。
 
 Android ChromeのDB構造が変更された場合に備え、取得失敗時は生ログを保持し、書き込みを省略する。
 
