@@ -306,9 +306,53 @@ gkill_server dvnf copy "$HOME/storage/shared/gkill_autolog/gpslog/*" GPSLogs
 `$AUTOLOG_HOME/url_denylist.txt` に書きます。1行1パターンです。
 
 - そのまま書くと部分一致（大文字小文字は区別しない）
-- `re:` で始めると正規表現
+- `re:` で始めると正規表現。こちらは大文字小文字を区別するので、
+  無視したいときは `(?i)` を先頭に付けます
 
 初回の実行時に既定の内容で作られます。
+
+### 通知を除外する
+
+`$AUTOLOG_HOME/notification_denylist.txt` に書きます。書式は URL 側と同じです。
+
+照合の相手はパッケージ名・アプリ名・**通知チャンネルID**の3つで、
+どれかに当たればその通知は gkill へ書き込まれません。
+
+チャンネルIDはアプリが通知の種類ごとに付けている名前です。
+同じアプリの通知でも一部だけ落としたいときに使います。
+Chrome のダウンロード完了だけを落として他の Chrome の通知は残す、
+といった書き分けはこれで行います。
+
+実際の値は生ログで確かめられます。
+
+```sql
+SELECT json_extract(payload,'$.package_name'),
+       json_extract(payload,'$.channel_id'),
+       json_extract(payload,'$.category'),
+       json_extract(payload,'$.title')
+  FROM raw_event WHERE event_type='notification'
+ GROUP BY 1,2,3;
+```
+
+チャンネルIDは `downloads` のような短い語なので、部分一致では書かず
+`re:(?i)^downloads$` のように前後を留めた正規表現で書いてください。
+部分一致だとアプリ名やパッケージ名の一部にも当たります。
+
+自動化ツールの通知とダウンロードの通知は既定で落ちるようにしてあります。
+
+### 既定の除外リストが更新されたとき
+
+除外リストは**ファイルが無いときだけ**既定の内容で作られます。
+利用者が書いたものを勝手に書き換えないためで、
+autolog を新しくしても既にある `url_denylist.txt` / `notification_denylist.txt` は
+そのまま残ります。
+
+新しい既定を取り込むには、端末ごとに次のどちらかをします。
+
+- 自分で書き足した行が無いなら、ファイルを消して `autolog import --dry-run --until-now`
+  を1回走らせます。除外リストの読み込みは書き込みより前なので、`--dry-run` でも
+  作り直されます。行数は実行結果の「通知の除外パターン: N 個」で確かめられます
+- 書き足した行があるなら、新しいセクションだけを手で写します
 
 ### 端末利用のタイトル
 

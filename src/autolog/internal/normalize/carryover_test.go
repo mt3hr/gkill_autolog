@@ -288,8 +288,8 @@ func TestNotificationRecordsAgainAfterDedupeWindow(t *testing.T) {
 }
 
 func TestNotificationDenyList(t *testing.T) {
-	// 除外リストはパッケージ名とアプリ名の両方を見る。
-	list, err := ParseDenyList(strings.NewReader("com.termux.api\nTasker\nre:^com\\.example\\.\n"))
+	// 除外リストはパッケージ名・アプリ名・チャンネルIDを見る。
+	list, err := ParseDenyList(strings.NewReader("com.termux.api\nTasker\nre:^com\\.example\\.\nre:(?i)^downloads$\n"))
 	if err != nil {
 		t.Fatalf("ParseDenyList: %v", err)
 	}
@@ -298,19 +298,24 @@ func TestNotificationDenyList(t *testing.T) {
 		name        string
 		packageName string
 		appLabel    string
+		channelID   string
 		want        int
 	}{
 		{name: "パッケージ名で除外", packageName: "com.termux.api", appLabel: "Termux:API", want: 0},
 		{name: "アプリ名で除外", packageName: "net.dinglisch.android.taskerm", appLabel: "Tasker", want: 0},
 		{name: "正規表現で除外", packageName: "com.example.app", appLabel: "サンプル", want: 0},
-		{name: "当たらなければ残す", packageName: "com.google.android.gm", appLabel: "Gmail", want: 1},
+		{name: "チャンネルIDで除外", packageName: "com.android.chrome", appLabel: "Chrome", channelID: "downloads", want: 0},
+		{name: "同じアプリの別チャンネルは残す", packageName: "com.android.chrome", appLabel: "Chrome", channelID: "sites", want: 1},
+		{name: "チャンネルIDが空でも落とさない", packageName: "com.google.android.gm", appLabel: "Gmail", want: 1},
+		{name: "当たらなければ残す", packageName: "com.google.android.gm", appLabel: "Gmail", channelID: "mail", want: 1},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			events := []*rawlog.Event{
 				androidEvent(t, "n1", rawlog.EventNotification, 0, nil, rawlog.NotificationPayload{
-					AppLabel: tt.appLabel, PackageName: tt.packageName, Title: "件名", Body: "本文",
+					AppLabel: tt.appLabel, PackageName: tt.packageName, ChannelID: tt.channelID,
+					Title: "件名", Body: "本文",
 				}),
 			}
 
@@ -322,6 +327,31 @@ func TestNotificationDenyList(t *testing.T) {
 				t.Errorf("件数 = %d, want %d", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestNotificationDenyListIgnoresEmptyChannelID(t *testing.T) {
+	// チャンネルIDができる前に集めた生ログでは空になる。
+	// 空文字に当たる正規表現を書かれても、過去の分がまとめて消えてはいけない。
+	// ^$ は空文字にだけ当たる。パッケージ名もアプリ名も空ではないので、
+	// チャンネルIDを照合していなければ通知は残る。
+	list, err := ParseDenyList(strings.NewReader("re:^$\n"))
+	if err != nil {
+		t.Fatalf("ParseDenyList: %v", err)
+	}
+
+	events := []*rawlog.Event{
+		androidEvent(t, "n1", rawlog.EventNotification, 0, nil, rawlog.NotificationPayload{
+			AppLabel: "Gmail", PackageName: "com.google.android.gm", Title: "件名", Body: "本文",
+		}),
+	}
+
+	result := runNormalizeWith(t, events, Options{
+		Cutoff:               base().Add(10 * min),
+		NotificationDenyList: list,
+	})
+	if got := len(proposalsBySource(result, SourceNotification)); got != 1 {
+		t.Errorf("件数 = %d, want 1", got)
 	}
 }
 
@@ -353,6 +383,40 @@ func TestDefaultNotificationDenyListExcludesAutomation(t *testing.T) {
 	}
 	// コメントアウトしてある行は効かない。
 	if list.Matches("com.google.android.gms") {
+		t.Error("コメント行が有効になっている")
+	}
+}
+
+func TestDefaultNotificationDenyListExcludesDownloads(t *testing.T) {
+	// 既定の除外リストでダウンロードの通知が落ちること。
+	list, err := ParseDenyList(strings.NewReader(DefaultNotificationDenyList))
+	if err != nil {
+		t.Fatalf("ParseDenyList: %v", err)
+	}
+
+	// ダウンロード専用のアプリはパッケージ名で落ちる。UI 側のパッケージも巻き取る。
+	for _, value := range []string{
+		"com.android.providers.downloads",
+		"com.android.providers.downloads.ui",
+	} {
+		if !list.Matches(value) {
+			t.Errorf("%s が既定の除外リストに当たらない", value)
+		}
+	}
+	// 他の通知も出すアプリはチャンネルIDで落とす。
+	for _, channelID := range []string{"downloads", "Downloads"} {
+		if !list.Matches(channelID) {
+			t.Errorf("チャンネルID %s が既定の除外リストに当たらない", channelID)
+		}
+	}
+	// Chrome そのものは落とさない。ダウンロード以外の通知は残す。
+	for _, value := range []string{"com.android.chrome", "Chrome", "sites"} {
+		if list.Matches(value) {
+			t.Errorf("%s まで既定の除外リストに当たっている", value)
+		}
+	}
+	// コメントアウトしてある行は効かない。
+	if list.Matches("com.google.android.documentsui") {
 		t.Error("コメント行が有効になっている")
 	}
 }

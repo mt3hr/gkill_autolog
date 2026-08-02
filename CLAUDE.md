@@ -72,7 +72,8 @@ gkill 本体と同じく、実装は `src/` の下、資料は `documents/revers
 詳細は `documents/reverse/design-philosophy.md`。
 
 - **観測できた事実だけを記録する。** 目的・感情・集中状態を推測しない。要約しない
-- **判断は決定的なルールで行う。** LLM に取捨を任せない。除外は `url_denylist.txt` のみ
+- **判断は決定的なルールで行う。** LLM に取捨を任せない。除外は `url_denylist.txt` と
+  `notification_denylist.txt` のみ
 - **生ログは消さない。** 追記専用。`(端末, event_id)` で一意なので再取り込みが安全
 - **失敗は記録せず次回やり直す。** 台帳には成功した分だけ載せる
 - **端末名・利用者名をコードに書かない。** 既定値も置かない。設定で決める

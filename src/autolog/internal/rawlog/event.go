@@ -183,6 +183,11 @@ type AppUsagePayload struct {
 }
 
 // NotificationPayload は EventNotification の payload。
+//
+// ChannelID と Category は Android が通知に付けている値をそのまま持つ。
+// 同じアプリでも通知の種類ごとにチャンネルが分かれるので、
+// 「Chrome のダウンロード完了だけ除外する」のような判定に使える。
+// この項目ができる前に集めた生ログでは空になる。
 type NotificationPayload struct {
 	AppLabel        string `json:"app_label"`
 	PackageName     string `json:"package_name,omitempty"`
@@ -190,6 +195,8 @@ type NotificationPayload struct {
 	Body            string `json:"body,omitempty"`
 	NotificationKey string `json:"notification_key,omitempty"`
 	Ongoing         bool   `json:"ongoing,omitempty"`
+	ChannelID       string `json:"channel_id,omitempty"`
+	Category        string `json:"category,omitempty"`
 }
 
 // NewEvent は payload を JSON 化して Event を組み立てる。

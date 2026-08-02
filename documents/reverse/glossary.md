@@ -111,7 +111,9 @@ Android で収集アプリと `autolog` が生ログを受け渡す場所 (`/sdc
 
 ### 除外リスト (deny list)
 
-URLog にしない URL のパターンを書くファイル (`url_denylist.txt`)。
+URLog にしない URL のパターンを書くファイル (`url_denylist.txt`) と、
+Kmemo にしない通知のパターンを書くファイル (`notification_denylist.txt`)。
+通知側はパッケージ名・アプリ名・通知チャンネルIDを照合します。
 
 何を残すかの判断はすべてこのファイルで決まります。
 判断を人にも AI にも都度求めません。
