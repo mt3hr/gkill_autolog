@@ -22,6 +22,7 @@ PowerShell スクリプトで構成される。MIT ライセンス。
 | `npm run build_android_apk` | 収集アプリの APK を作る |
 | `npm run release` | 全プラットフォーム向けにビルドして成果物を検査 |
 | `cd src\autolog && go test ./...` | Go のテスト |
+| `npm run test_chrome_ext` | Chrome 拡張のテスト（Node 標準ランナー + chrome スタブ） |
 | `cd src\android && .\gradlew.bat --% assembleDebug -PversionName=X -PversionCode=N` | APK |
 | `.\src\scripts\check_connection.ps1` | gkill へ繋がるか確認（書き込まない） |
 | `.\src\scripts\run_import.ps1 -DryRun -UntilNow` | 取り込みの内容確認 |

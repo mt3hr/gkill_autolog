@@ -31,6 +31,30 @@ const KEY_QUEUE = "queue";
 const KEY_SETTINGS = "settings";
 const KEY_PENDING_PLAYS = "pendingPlays";
 
+// ---------------------------------------------------------------- 直列化
+//
+// chrome.storage の読み書きは get → 変更 → set の3手で、原子的ではない。
+// イベントリスナ (タブ閉鎖・メッセージ・アラーム) は await の切れ目で交錯するため、
+// 2つの処理が同じスナップショットを読むと、後勝ちで片方の変更が黙って消える。
+// 再生中のタブを閉じると閲覧の確定 (onRemoved) と再生の確定 (pagehide の報告) が
+// ほぼ同時に走るので、現実に踏む。
+//
+// Service Worker は単一インスタンスなので、状態を触る処理をメモリ上の
+// Promise チェーンで1列に並べれば足りる。SW が止まればチェーンごと消えるが、
+// そのとき実行中の処理も一緒に止まるので取り残しは起きない。
+//
+// ロックの中から withState を呼ぶとデッドロックする。状態を触る関数
+// (syncView / closeView / recordProgress / finalizePlays / enqueue) は
+// ロックを取らず、入口 (イベントリスナ) だけで取る。
+// 例外は removeFromQueue で、ロックの外で走る flush から呼ばれるため自分で取る。
+let stateChain = Promise.resolve();
+
+function withState(task) {
+  const run = stateChain.then(task, task);
+  stateChain = run.then(() => {}, () => {});
+  return run;
+}
+
 // ---------------------------------------------------------------- 設定
 
 async function loadSettings() {
@@ -136,12 +160,17 @@ async function flush() {
 //
 // 件数ではなく event_id で外す。送信中に enqueue の上限切り捨てが走ると
 // 先頭の位置がずれ、件数で外すと未送信のイベントを巻き込んでしまう。
+//
+// flush はロックの外で走る (送信中に状態の処理を止めないため) ので、
+// キューの読み書きだけここでロックを取る。並行した enqueue を上書きで消さない。
 async function removeFromQueue(sent) {
   const sentIds = new Set(sent.map((event) => event.event_id));
-  const stored = await chrome.storage.local.get(KEY_QUEUE);
-  const queue = stored[KEY_QUEUE] || [];
-  await chrome.storage.local.set({
-    [KEY_QUEUE]: queue.filter((event) => !sentIds.has(event.event_id)),
+  await withState(async () => {
+    const stored = await chrome.storage.local.get(KEY_QUEUE);
+    const queue = stored[KEY_QUEUE] || [];
+    await chrome.storage.local.set({
+      [KEY_QUEUE]: queue.filter((event) => !sentIds.has(event.event_id)),
+    });
   });
 }
 
@@ -252,12 +281,12 @@ async function syncView() {
 
 chrome.runtime.onInstalled.addListener(() => {
   chrome.alarms.create(ALARM_NAME, { periodInMinutes: TICK_MINUTES });
-  syncView();
+  withState(syncView);
 });
 
 chrome.runtime.onStartup.addListener(() => {
   chrome.alarms.create(ALARM_NAME, { periodInMinutes: TICK_MINUTES });
-  syncView();
+  withState(syncView);
 });
 
 // Service Worker が起きるたびの保険。アラームが何かの拍子に消えていると
@@ -272,31 +301,38 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name !== ALARM_NAME) {
     return;
   }
-  await syncView();
-  await finalizePlays(Date.now());
+  await withState(async () => {
+    await syncView();
+    await finalizePlays(Date.now());
+  });
+  // flush はロックの外。キューが長いと送信が心拍をまたぐことがあり、
+  // その間も閲覧・再生の記録を止めない。キューの取り外しは removeFromQueue が
+  // 自分でロックを取る。
   await flush();
 });
 
 chrome.tabs.onActivated.addListener(() => {
-  syncView();
+  withState(syncView);
 });
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
   // URL の遷移とタイトルの確定の両方を拾う。
   if (changeInfo.url || changeInfo.title) {
-    syncView();
+    withState(syncView);
   }
 });
 
-chrome.tabs.onRemoved.addListener(async (tabId) => {
-  const stored = await chrome.storage.local.get(KEY_VIEW);
-  if (stored[KEY_VIEW] && stored[KEY_VIEW].tabId === tabId) {
-    await closeView(Date.now());
-  }
+chrome.tabs.onRemoved.addListener((tabId) => {
+  return withState(async () => {
+    const stored = await chrome.storage.local.get(KEY_VIEW);
+    if (stored[KEY_VIEW] && stored[KEY_VIEW].tabId === tabId) {
+      await closeView(Date.now());
+    }
+  });
 });
 
 chrome.windows.onFocusChanged.addListener(() => {
-  syncView();
+  withState(syncView);
 });
 
 // ---------------------------------------------------------------- 再生実績
@@ -310,7 +346,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (!message || message.type !== "media_progress") {
     return false;
   }
-  recordProgress(message).then(() => sendResponse({ received: true }));
+  withState(() => recordProgress(message)).then(() => sendResponse({ received: true }));
   return true;
 });
 
