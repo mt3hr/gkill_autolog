@@ -30,6 +30,12 @@ const KEY_VIEW = "currentView";
 const KEY_QUEUE = "queue";
 const KEY_SETTINGS = "settings";
 const KEY_PENDING_PLAYS = "pendingPlays";
+const KEY_FINALIZED_PLAYS = "finalizedPlays";
+
+// FINALIZED_TTL_MS は確定済み再生の記録 (墓標) を覚えておく長さ。
+// 墓標は「同じ playId の報告が確定後も続いたとき」の差分計算にだけ要る。
+// 長い動画を見続ける1日は十分に覆い、無限には溜めない。
+const FINALIZED_TTL_MS = 24 * 60 * 60 * 1000;
 
 // ---------------------------------------------------------------- 直列化
 //
@@ -367,9 +373,28 @@ async function recordProgress(message) {
     return;
   }
 
-  const stored = await chrome.storage.local.get(KEY_PENDING_PLAYS);
+  const stored = await chrome.storage.local.get([KEY_PENDING_PLAYS, KEY_FINALIZED_PLAYS]);
   const pending = stored[KEY_PENDING_PLAYS] || {};
+  const finalized = stored[KEY_FINALIZED_PLAYS] || {};
   const previous = pending[message.playId];
+
+  // content script の playedSeconds は累計で、確定後もリセットされない
+  // (スリープ復帰などで報告が途絶えて心拍が確定させても、ページ側は続きを数える)。
+  // 確定済みの分を引かずにそのまま積むと、同じ再生時間が二重に記録される。
+  // 確定した時点の値を墓標として覚えておき、以後の報告は差分に組み替える。
+  let playedSeconds = message.playedSeconds;
+  let startedAt = message.startedAt;
+  const tombstone = finalized[message.playId];
+  if (tombstone) {
+    playedSeconds = message.playedSeconds - tombstone.playedSeconds;
+    if (playedSeconds <= 0) {
+      // 確定済みの内容の再送。新しい再生は進んでいない。
+      return;
+    }
+    // 続きの区間は、確定した区間の終わりから始まったとみなす。
+    // 実際の再開時刻は分からないが、区間の重なりと二重計上は避けられる。
+    startedAt = Math.max(tombstone.endedAt, message.startedAt);
+  }
 
   pending[message.playId] = {
     service: message.service,
@@ -379,8 +404,8 @@ async function recordProgress(message) {
     // MediaSession がまだ返さない間の報告が後から届くことがある。
     title: message.title || (previous ? previous.title : "") || "",
     artist: message.artist || (previous ? previous.artist : "") || "",
-    playedSeconds: message.playedSeconds,
-    startedAt: message.startedAt,
+    playedSeconds,
+    startedAt,
     endedAt: message.endedAt,
     updatedAt: Date.now(),
     // 再生が終わったことを content script が知っている場合は即座に確定させる。
@@ -392,9 +417,22 @@ async function recordProgress(message) {
 }
 
 // finalizePlays は報告が途切れた再生を media_play イベントとして確定させる。
+//
+// 確定した再生は墓標 (finalizedPlays) に累計値を残す。同じ playId の報告が
+// 確定後も続いた場合、recordProgress が墓標との差分だけを続きの再生として扱う。
+// これが無いと、スリープ復帰などで一度確定した再生が再開されたとき、
+// 累計の実再生秒数を持つ2本目のイベントができて二重計上になる。
 async function finalizePlays(now) {
-  const stored = await chrome.storage.local.get(KEY_PENDING_PLAYS);
+  const stored = await chrome.storage.local.get([KEY_PENDING_PLAYS, KEY_FINALIZED_PLAYS]);
   const pending = stored[KEY_PENDING_PLAYS] || {};
+  const finalized = stored[KEY_FINALIZED_PLAYS] || {};
+
+  // 使い終わった墓標を掃除する。差分計算に要るのは確定からしばらくの間だけ。
+  for (const [playId, tombstone] of Object.entries(finalized)) {
+    if (now - tombstone.finalizedAt > FINALIZED_TTL_MS) {
+      delete finalized[playId];
+    }
+  }
 
   const remaining = {};
   for (const [playId, play] of Object.entries(pending)) {
@@ -413,8 +451,8 @@ async function finalizePlays(now) {
       schema_version: 1,
       // 同じ再生の確定からは同じ id を作る。finalizePlays は心拍と報告受信の
       // 両方から並行に呼ばれることがあり、同じ確定を2回積んでも受け口の
-      // (device, event_id) で1件に畳まれる。一時停止後に同じ再生が
-      // 続きから確定し直された場合は endedAt が進むので別 id になる。
+      // (device, event_id) で1件に畳まれる。確定後に同じ再生が続いた場合は
+      // 差分の区間 (開始が前回の終了) になるので別 id になる。
       event_id: `media_play:${playId}:${play.startedAt}:${Math.round(play.endedAt / 1000)}`,
       event_type: "media_play",
       start_time: new Date(play.startedAt).toISOString(),
@@ -434,7 +472,19 @@ async function finalizePlays(now) {
         played_seconds: play.playedSeconds,
       },
     });
+
+    // 墓標は content script の累計値の座標で持つ。
+    // 差分に組み替えた再生 (2本目以降) の確定では、前回の累計へ差分を足す。
+    const previousTotal = finalized[playId] ? finalized[playId].playedSeconds : 0;
+    finalized[playId] = {
+      playedSeconds: previousTotal + play.playedSeconds,
+      endedAt: play.endedAt,
+      finalizedAt: now,
+    };
   }
 
-  await chrome.storage.local.set({ [KEY_PENDING_PLAYS]: remaining });
+  await chrome.storage.local.set({
+    [KEY_PENDING_PLAYS]: remaining,
+    [KEY_FINALIZED_PLAYS]: finalized,
+  });
 }
