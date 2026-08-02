@@ -37,6 +37,9 @@ type WriteStats struct {
 	Written int
 	// Skipped は台帳にあり既に書き込み済みだった件数。
 	Skipped int
+	// Overlapped は書き込み済みの区間と一部重なるため書き込まなかった件数。
+	// 遅れて届いた生ログが確定済みの区間を延ばしたときに起きる。
+	Overlapped int
 	// Dropped は判定で捨てた件数。
 	Dropped int
 	// Failed は書き込みに失敗した件数。
@@ -85,15 +88,32 @@ func (w *Writer) WriteAll(ctx context.Context, proposals []normalize.Proposal, k
 		// 元イベントがすべて書き込み済みなら、カーソルの引き戻しで
 		// 確定済み区間を途中から読み直してできた断片。id は違っても中身は
 		// 既に書いた区間の一部なので、書き込むと二重登録になる。
-		covered, err := w.ledger.IsCovered(ctx,
+		covered, total, err := w.ledger.CoveredCount(ctx,
 			string(proposal.Kind), proposal.Source, string(proposal.Device), proposal.SourceEventIDs)
 		if err != nil {
 			return nil, err
 		}
-		if covered {
+		if total > 0 && covered == total {
 			stats.Skipped++
 			w.logger.Debug("書き込み済み区間の断片のため書き込まない",
 				"proposal_id", proposal.ID, "kind", proposal.Kind, "source", proposal.Source)
+			continue
+		}
+		// 一部だけが書き込み済みの区間は、遅れて届いた生ログが確定済みの区間を
+		// 延ばした形。そのまま書くと、既に書いた短い区間と重なる長い区間が
+		// もう1本できてしまうので、区間系の収集元では書き込まない。
+		// 延びた分の記録は失われるが、重複した TimeIs を作るよりましと判断する。
+		//
+		// 接続系 (Wi-Fi・Bluetooth・充電) は対象にしない。観測の切れ目マーカーの
+		// セッションイベントを複数の区間が共有するので、一部重複が正常な形。
+		// URLog は元イベントが1つなので一部重複になりえず、Kmemo (通知) は
+		// 同じ通知の更新列が正当に重なるので、どちらも対象にしない。
+		if covered > 0 && overlapProtected(proposal) {
+			stats.Overlapped++
+			w.logger.Warn("書き込み済みの区間と一部重なるため書き込まない (遅着イベントによる区間の延長)",
+				"proposal_id", proposal.ID, "kind", proposal.Kind, "source", proposal.Source,
+				"covered", covered, "total", total,
+				"start", formatOptional(proposal.StartTime), "end", formatOptional(proposal.EndTime))
 			continue
 		}
 		if decision, judged := keep[proposal.ID]; judged && !decision {
@@ -211,6 +231,23 @@ func (w *Writer) describeUser(device rawlog.Device) string {
 // 端末タグが唯一の識別手段だったが、HTTP API を直接叩くようになって不要になった。
 func tagsFor(proposal normalize.Proposal) []string {
 	return []string{proposal.Source}
+}
+
+// overlapProtected は「書き込み済みイベントとの一部重複」を二重登録の兆候として
+// 弾く対象かを返す。
+//
+// 対象は結合で区間が延びうる TimeIs (ウィンドウ・アプリ利用、メディア再生、端末利用)。
+// これらは確定済みの区間が遅着イベントと結合されて上位集合の提案になる経路があり、
+// 書き込むと同じ時間帯の TimeIs が2本になる。
+func overlapProtected(proposal normalize.Proposal) bool {
+	if proposal.Kind != normalize.KindTimeIs {
+		return false
+	}
+	switch proposal.Source {
+	case normalize.SourceWindow, normalize.SourceMedia, normalize.SourceDevice:
+		return true
+	}
+	return false
 }
 
 // waitForURLogRateLimit は add_urlog の間隔を空ける。

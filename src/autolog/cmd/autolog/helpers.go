@@ -71,18 +71,40 @@ func resolveCutoff(flag string) (time.Time, error) {
 // resolveFrom は処理の開始位置を決める。
 //
 // 既定は前回のカーソル。カーソルが無ければ7日前まで遡る（要件 §17 の滞留許容に合わせる）。
-func resolveFrom(ctx context.Context, store *rawlog.Store, flag string) (time.Time, error) {
+//
+// 低水位マーク (CursorBackfill) がカーソルより過去を指していれば、そこまで遡る。
+// 区間イベントは終わってから届くので、前回の取り込みがカーソルを進めた後に
+// カーソルより過去の start_time で生ログが入ることがある。マークまで遡らないと、
+// その分が二度と取り込まれない。読み直しの重複は台帳のイベント包含が防ぐ。
+//
+// 2つ目の戻り値は消費した低水位マーク。取り込みが成功したら、呼び出し側が
+// ClearBackfillMark へ渡して消す（取り込み中に新しい遅着があれば値が変わり、消えずに残る）。
+// マークが無いとき・--since 指定時はゼロ値を返す。
+func resolveFrom(ctx context.Context, store *rawlog.Store, flag string) (time.Time, time.Time, error) {
 	if flag != "" {
-		return rawlog.ParseTime(flag)
+		from, err := rawlog.ParseTime(flag)
+		return from, time.Time{}, err
 	}
 	cursor, ok, err := store.GetCursor(ctx, rawlog.CursorNormalize)
 	if err != nil {
-		return time.Time{}, err
+		return time.Time{}, time.Time{}, err
 	}
-	if ok {
-		return cursor, nil
+	if !ok {
+		return time.Now().AddDate(0, 0, -7), time.Time{}, nil
 	}
-	return time.Now().AddDate(0, 0, -7), nil
+
+	mark, hasMark, err := store.GetCursor(ctx, rawlog.CursorBackfill)
+	if err != nil {
+		return time.Time{}, time.Time{}, err
+	}
+	if !hasMark {
+		return cursor, time.Time{}, nil
+	}
+	from := cursor
+	if mark.Before(from) {
+		from = mark
+	}
+	return from, mark, nil
 }
 
 // proposalTime は提案が指す時刻を返す。カーソルの引き戻しに使う。
