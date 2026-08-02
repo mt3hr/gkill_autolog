@@ -72,3 +72,14 @@ func proposalsBySource(result *Result, source string) []Proposal {
 	}
 	return filtered
 }
+
+// proposalsByKind は指定した収集元のうち、種類が一致する提案だけを返す。
+func proposalsByKind(result *Result, source string, kind Kind) []Proposal {
+	var filtered []Proposal
+	for _, p := range proposalsBySource(result, source) {
+		if p.Kind == kind {
+			filtered = append(filtered, p)
+		}
+	}
+	return filtered
+}

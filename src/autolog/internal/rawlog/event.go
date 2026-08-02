@@ -71,7 +71,7 @@ const (
 	EventPower EventType = "power"
 	// EventBrowserView はブラウザの1回の連続閲覧区間。
 	EventBrowserView EventType = "browser_view"
-	// EventMediaPlay は YouTube / YouTube Music の1回の再生。
+	// EventMediaPlay は動画・音楽の1回の再生。
 	EventMediaPlay EventType = "media_play"
 	// EventAppUsage は Android のアプリ利用区間。
 	EventAppUsage EventType = "app_usage"
@@ -160,17 +160,24 @@ type MediaService string
 const (
 	ServiceYouTube      MediaService = "youtube"
 	ServiceYouTubeMusic MediaService = "youtube_music"
+	// ServiceWeb は YouTube 以外のサイトでの再生。
+	ServiceWeb MediaService = "web"
+	// ServiceApp は YouTube 以外のアプリでの再生。AppLabel にアプリ名が入る。
+	ServiceApp MediaService = "app"
 )
 
 // MediaPlayPayload は EventMediaPlay の payload。
 // PlayedSeconds には一時停止時間と広告再生時間を含めない。
 // URL が確定できない場合は空文字のままにする。検索URLや推測URLを作ってはならない。
+//
+// AppLabel は表示上のアプリ名。パッケージ名は入れない（要件 §11.2）。
 type MediaPlayPayload struct {
 	Service       MediaService `json:"service"`
 	URL           string       `json:"url,omitempty"`
 	VideoID       string       `json:"video_id,omitempty"`
 	Title         string       `json:"title,omitempty"`
 	Artist        string       `json:"artist,omitempty"`
+	AppLabel      string       `json:"app_label,omitempty"`
 	PlayedSeconds float64      `json:"played_seconds"`
 }
 

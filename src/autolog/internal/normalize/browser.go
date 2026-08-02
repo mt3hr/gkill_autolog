@@ -55,6 +55,10 @@ var mediaServiceHosts = []string{
 // media_play 経由だけで記録する。再生していない閲覧は記録されないが、
 // 要件が「個別コンテンツだけ」と定めているのでそれでよい。
 //
+// YouTube 以外のサイトはホストで落とさず、同じURLの再生があったときだけ
+// browserViews が URLog を譲る（mediaURLs）。YouTube の閲覧URLは再生URLと
+// 完全一致しない（&list= などが付く）ため、こちらはホスト単位で外す必要がある。
+//
 // ホスト名で判定する。文字列の部分一致だと
 // https://example.com/?ref=youtube.com のような URL まで拾ってしまう。
 func isMediaServiceURL(rawURL string) bool {
@@ -77,7 +81,11 @@ func isMediaServiceURL(rawURL string) bool {
 //
 // 広告や中継ページなど機械的に判別できない除外は denyList で行う。
 // 2つ目の戻り値は書き込む URLog の一覧で、内容確認用に出力する。
-func browserViews(device rawlog.Device, events []*rawlog.Event, denyList *DenyList) ([]Proposal, []URLCandidate, error) {
+//
+// mediaURLs は mediaPlays が同じ端末で URLog にした URL。
+// 動画サイトでは同じページが閲覧区間としても届くため、そのままだと同じURLの
+// URLog が2件になる。再生側を残し、閲覧側は落とす。
+func browserViews(device rawlog.Device, events []*rawlog.Event, denyList *DenyList, mediaURLs map[string]struct{}) ([]Proposal, []URLCandidate, error) {
 	var (
 		proposals  []Proposal
 		candidates []URLCandidate
@@ -94,6 +102,10 @@ func browserViews(device rawlog.Device, events []*rawlog.Event, denyList *DenyLi
 		}
 		// YouTube / YouTube Music は media_play 側が個別コンテンツだけを記録する。
 		if isMediaServiceURL(payload.URL) {
+			continue
+		}
+		// 同じURLの再生を media_play 側で URLog にしている。二重に登録しない。
+		if _, played := mediaURLs[payload.URL]; played {
 			continue
 		}
 		// 利用者が列挙した除外パターン。広告や中継ページなど。
@@ -139,33 +151,37 @@ func browserViews(device rawlog.Device, events []*rawlog.Event, denyList *DenyLi
 //
 // 一時停止時間と広告再生時間は収集側で既に除いてある。
 //
-// URL が確定できたかどうかで作る Kyou の種類が変わる。
-//   - 確定できた: URLog。Chrome 拡張はページの URL を読めるので常にこちら
-//   - 確定できない: TimeIs。Android の MediaSession はタイトルしか返さないことが多い
+// 再生していた区間は常に TimeIs にする。そのうえで URL を確定できた再生には
+// URLog も作る。区間と「何を再生したか」は別の事実なので、両方残す。
+//   - URL を確定できるのは Chrome 拡張の再生と、動画IDを確認できた Android の再生
+//   - Android の MediaSession はタイトルしか返さないことが多く、その場合は TimeIs だけ
 //
 // どちらも実再生時間が MinPlayedSeconds 以上のものだけを残す（要件 §8.1）。
 // URLog は同じ動画や楽曲でも再生の都度1件作り、RelatedTime は再生開始時刻にする。
 //
 // TimeIs は同じタイトルの再生が WindowMergeWindow 以内に続いていれば1本にまとめる。
-// Android の MediaSession は曲を止めずに聴いていても区間を細かく切って返すため、
-// まとめないと同じ曲の TimeIs が並ぶ。
+// MediaSession は曲を止めずに聴いていても区間を細かく切って返すため、
+// まとめないと同じ曲の TimeIs が並ぶ。まとめた結果、TimeIs 1本に対して
+// URLog が複数並ぶことがある。
 //
 // 検索URLや推測したURLは作らない（要件 §8.2）。TimeIs にはタイトル・アーティストという
 // 観測できた事実だけを載せ、URL の代わりを埋め合わせることはしない。
 //
 // Claude の判定は通さない（残す条件が要件で決まっているため）。
 //
-// 2つ目の戻り値は次回へ持ち越す末尾の区間。
-func mediaPlays(device rawlog.Device, events []*rawlog.Event, opts Options, carried []rawlog.OpenStateInterval) ([]Proposal, []rawlog.OpenStateInterval, error) {
+// 2つ目の戻り値は URLog にした URL。browserViews が同じURLの閲覧区間を落とすのに使う。
+// 3つ目の戻り値は次回へ持ち越す末尾の区間。
+func mediaPlays(device rawlog.Device, events []*rawlog.Event, opts Options, carried []rawlog.OpenStateInterval) ([]Proposal, map[string]struct{}, []rawlog.OpenStateInterval, error) {
 	var (
 		proposals []Proposal
 		intervals []timedInterval
 	)
+	urlogURLs := map[string]struct{}{}
 
 	for _, event := range filterType(events, rawlog.EventMediaPlay) {
 		payload, err := rawlog.DecodePayload[rawlog.MediaPlayPayload](event)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 
 		// 判定は実再生時間で行う（要件 §8.1）。
@@ -175,22 +191,25 @@ func mediaPlays(device rawlog.Device, events []*rawlog.Event, opts Options, carr
 			continue
 		}
 
-		if strings.TrimSpace(payload.URL) != "" {
+		// URL を確定できた再生は URLog にする。
+		// 利用者が列挙した除外パターンには従う。対象が全サイトに広がったため、
+		// 落としたいものを url_denylist.txt で抑えられる必要がある。
+		if url := strings.TrimSpace(payload.URL); url != "" && !opts.DenyList.Matches(url) {
 			proposals = append(proposals, Proposal{
 				ID:             makeID(KindURLog, SourceMedia, []string{event.EventID}),
 				Kind:           KindURLog,
 				Device:         device,
 				Source:         SourceMedia,
 				SourceEventIDs: []string{event.EventID},
-				URL:            payload.URL,
+				URL:            url,
 				Title:          mediaTitle(payload),
 				RelatedTime:    timePtr(event.StartTime),
 			})
-			continue
+			urlogURLs[url] = struct{}{}
 		}
 
-		// URL が無い再生は TimeIs にする。
-		// タイトルまで無いと何を再生したのか分からず、区間だけが残る。
+		// 再生していた区間は URL の有無によらず TimeIs にする。
+		// タイトルが無いと何を再生したのか分からず、区間だけが残る。
 		// それは app_usage の TimeIs と変わらないので作らない。
 		title := mediaTitle(payload)
 		if title == "" {
@@ -220,7 +239,7 @@ func mediaPlays(device rawlog.Device, events []*rawlog.Event, opts Options, carr
 			EndTime:        timePtr(interval.end),
 		})
 	}
-	return proposals, pending, nil
+	return proposals, urlogURLs, pending, nil
 }
 
 // mediaEndTime は再生の終了時刻を返す。

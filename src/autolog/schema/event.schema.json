@@ -129,16 +129,17 @@
       }
     },
     "media_play": {
-      "title": "media_play — YouTube / YouTube Music の1回の再生",
-      "description": "実再生秒数は一時停止時間と広告再生時間を含めない。url が入っていれば URLog、空なら TimeIs になる。",
+      "title": "media_play — 動画・音楽の1回の再生",
+      "description": "実再生秒数は一時停止時間と広告再生時間を含めない。再生していた区間は常に TimeIs になり、url が入っていれば URLog も作られる。",
       "type": "object",
       "required": ["service", "played_seconds"],
       "properties": {
-        "service": { "type": "string", "enum": ["youtube", "youtube_music"] },
-        "url": { "type": "string", "description": "個別コンテンツの正式URL。推測・検索URLの生成は禁止。確認できた動画IDから組み立てるのは可。不明なら空文字。" },
+        "service": { "type": "string", "enum": ["youtube", "youtube_music", "web", "app"], "description": "web は YouTube 以外のサイト、app は YouTube 以外のアプリ。" },
+        "url": { "type": "string", "description": "再生していたページの正式URL。推測・検索URLの生成は禁止。確認できた動画IDから組み立てるのは可。不明なら空文字。" },
         "video_id": { "type": "string" },
         "title": { "type": "string", "description": "取得できた正式タイトル。" },
         "artist": { "type": "string" },
+        "app_label": { "type": "string", "description": "表示上のアプリ名。パッケージ名は入れない。" },
         "played_seconds": { "type": "number", "minimum": 0 }
       }
     },

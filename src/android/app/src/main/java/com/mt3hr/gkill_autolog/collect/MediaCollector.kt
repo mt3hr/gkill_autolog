@@ -2,6 +2,7 @@ package com.mt3hr.gkill_autolog.collect
 
 import android.content.ComponentName
 import android.content.Context
+import android.content.pm.PackageManager
 import android.media.session.MediaController
 import android.media.session.MediaSessionManager
 import android.media.session.PlaybackState
@@ -11,20 +12,25 @@ import com.mt3hr.gkill_autolog.store.EventStore
 import org.json.JSONObject
 
 /**
- * YouTube と YouTube Music の再生を MediaSession から記録する。
+ * 動画・音楽の再生を MediaSession から記録する。
+ *
+ * 対象は YouTube と YouTube Music に限らず、MediaSession を持つアプリすべて。
+ * 自アプリだけ除外する。
  *
  * 記録するのは実際に再生された秒数だけで、一時停止している間は数えない。
  *
  * **検索URLや推測したURLは作らない**（要件 §8.2）。
- * ただしメタデータの中に動画IDそのものが入っていることがあるので、
+ * ただし YouTube 系はメタデータの中に動画IDそのものが入っていることがあるので、
  * [extractVideoId] で確認できたときだけ正規URLを組み立てる。
  * 確認できた動画IDから正規URLを作るのは推測ではない。
+ * 他のアプリでは URL を作らない。アートURIがたまたま同じ形をしていても、
+ * それが YouTube の動画IDである保証がないため。
  *
  * 動画IDを確認できなかった再生も生ログには残す。
  * タイトルとアーティストは MediaSession から観測できた事実なので、
- * X1 Yoga 側の normalize が URL 無しの再生として TimeIs にする（要件 §8.2）。
+ * normalize が TimeIs にする（要件 §8.2）。
  *
- * 30秒未満を落とす判定は X1 Yoga 側の normalize が行う。
+ * 30秒未満を落とす判定は normalize が行う。
  */
 class MediaCollector(
     private val context: Context,
@@ -43,6 +49,8 @@ class MediaCollector(
         val title: String,
         val artist: String,
         val service: String,
+        /** 表示上のアプリ名。 */
+        val appLabel: String,
         /** 確認できた動画ID。確認できなければ空。 */
         var videoId: String,
         val startedAt: Long,
@@ -64,9 +72,9 @@ class MediaCollector(
 
         val seen = mutableSetOf<String>()
         for (controller in controllers) {
-            val service = serviceOf(controller.packageName) ?: continue
+            if (controller.packageName == context.packageName) continue
             seen.add(controller.packageName)
-            update(controller, service, now)
+            update(controller, serviceOf(controller.packageName), now)
         }
 
         // 消えたセッションは再生終了とみなして確定させる。
@@ -102,6 +110,7 @@ class MediaCollector(
                 title = title,
                 artist = artist,
                 service = service,
+                appLabel = appLabel(controller.packageName),
                 videoId = "",
                 startedAt = now,
                 playedMillis = 0,
@@ -112,7 +121,9 @@ class MediaCollector(
 
         // 動画IDは再生開始直後のメタデータにはまだ入っていないことがある。
         // 一度確認できたらそのまま持ち、以降は上書きしない。
-        if (state.videoId.isEmpty()) {
+        // YouTube 系以外では取り出さない。別のサービスのアートURIが同じ形をしていても
+        // それが YouTube の動画IDだとは限らず、存在しないURLを作ってしまう。
+        if (state.videoId.isEmpty() && isYouTubeService(state.service)) {
             state.videoId = extractVideoId(metadata).orEmpty()
         }
 
@@ -135,10 +146,11 @@ class MediaCollector(
             .put("service", state.service)
             .put("title", state.title)
             .put("artist", state.artist)
+            .put("app_label", state.appLabel)
             .put("played_seconds", state.playedMillis / 1000.0)
 
         // 動画IDを確認できたときだけ URL を載せる。
-        // 載っていれば normalize が URLog に、載っていなければ TimeIs にする。
+        // 載っていれば normalize が TimeIs に加えて URLog も作る。
         if (state.videoId.isNotEmpty()) {
             payload.put("video_id", state.videoId)
             payload.put("url", watchUrl(state.service, state.videoId))
@@ -147,21 +159,38 @@ class MediaCollector(
         store.put(Event.interval(EventType.MEDIA_PLAY, state.startedAt, now, payload))
     }
 
-    private fun serviceOf(packageName: String): String? = when (packageName) {
-        PACKAGE_YOUTUBE -> "youtube"
-        PACKAGE_YOUTUBE_MUSIC -> "youtube_music"
-        else -> null
+    /** 再生元の種別。YouTube 系以外はすべて app。 */
+    private fun serviceOf(packageName: String): String = when (packageName) {
+        PACKAGE_YOUTUBE -> SERVICE_YOUTUBE
+        PACKAGE_YOUTUBE_MUSIC -> SERVICE_YOUTUBE_MUSIC
+        else -> SERVICE_APP
+    }
+
+    private fun isYouTubeService(service: String): Boolean =
+        service == SERVICE_YOUTUBE || service == SERVICE_YOUTUBE_MUSIC
+
+    /** 表示上のアプリ名。取得できなければパッケージ名をそのまま使う。 */
+    private fun appLabel(packageName: String): String = try {
+        val packageManager = context.packageManager
+        val info = packageManager.getApplicationInfo(packageName, 0)
+        packageManager.getApplicationLabel(info).toString()
+    } catch (_: PackageManager.NameNotFoundException) {
+        packageName
     }
 
     /** 確認できた動画IDから、そのサービスでの正規URLを組み立てる。 */
     private fun watchUrl(service: String, videoId: String): String {
-        val host = if (service == "youtube_music") "music.youtube.com" else "www.youtube.com"
+        val host = if (service == SERVICE_YOUTUBE_MUSIC) "music.youtube.com" else "www.youtube.com"
         return "https://$host/watch?v=$videoId"
     }
 
     companion object {
         private const val PACKAGE_YOUTUBE = "com.google.android.youtube"
         private const val PACKAGE_YOUTUBE_MUSIC = "com.google.android.apps.youtube.music"
+
+        private const val SERVICE_YOUTUBE = "youtube"
+        private const val SERVICE_YOUTUBE_MUSIC = "youtube_music"
+        private const val SERVICE_APP = "app"
 
         /**
          * サムネイルURIに埋まっている動画ID。

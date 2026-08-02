@@ -50,7 +50,7 @@ gkill Write MCPへ完全自動書き込み
 * 日次要約、集中時間、活動目的、感情、成果の推測は行わない
 * ブラウザは閲覧ページを具体的なURLogとして残す
 * アプリ操作はTimeIsとして残す
-* YouTubeとYouTube Musicは個別コンテンツのURLogだけを残す
+* 動画・音楽の再生は再生区間をTimeIsとして残し、URLを確定できたときはURLogも残す
 * スクリーンショットはClaudeを経由させず、IDFとして取り込む
 * Gitコミットは既存のGitCommitLogがあるため対象外
 * 生ログは当面削除しない
@@ -218,6 +218,8 @@ VS Codeについて、ファイルやRepositoryを別途解析する専用処理
 * リダイレクト途中
 * 広告ページ
 * 内容を閲覧する前の一時的な中継ページ
+* YouTube・YouTube Musicのページ（§8が担当する）
+* 同じURLを再生としてURLogにしたページ（§8.1）
 * Claudeが操作上の不要ページと判断したもの
 
 Claudeはページの意味を要約せず、URLogとして残す必要があるかだけを判定する。
@@ -230,24 +232,27 @@ Chrome操作は、他のWindowsアプリと同じ条件でTimeIs化する。
 * 30秒以上1分未満のページは、TimeIsにならずURLogだけ残る場合がある
 * TimeIsとURLogは独立して作成する
 
-## 8. YouTube・YouTube Music
+## 8. 動画・音楽の再生
 
 ### 8.1 共通条件
 
-作成するKyouは、個別コンテンツのURLを確定できた場合はURLogのみ。
-確定できなかった場合はTimeIsのみ（8.2参照）。両方は作らない。
+**再生していた区間は常にTimeIsとして残す。**
+そのうえで、再生していたコンテンツのURLを確定できた場合はURLogも作る。
+区間と「何を再生したか」は別の事実なので、両方残す。
 
 記録対象：
 
-* YouTube動画
-* YouTube Musicの個別楽曲
+* YouTube動画・YouTube Musicの個別楽曲
+* それ以外のサイトで再生した動画・音楽（Chrome拡張が測る）
+* それ以外のアプリで再生した動画・音楽（AndroidのMediaSessionが返すもの）
 
 記録対象外：
 
 * 広告
-* プレイリストURL
-* アルバムURL
+* ループ再生の素材、長さが30秒未満と分かっている素材（装飾目的の自動再生とみなす）
+* 消音での再生（YouTube・YouTube Musicを除く。一般のサイトでは装飾目的の目印になるため）
 * 30秒未満しか再生されなかったコンテンツ
+* タイトルを取得できなかった再生（TimeIsとして。URLがあればURLogは残す）
 
 判定条件：
 
@@ -256,15 +261,23 @@ Chrome操作は、他のWindowsアプリと同じ条件でTimeIs化する。
 * 広告再生時間は含めない
 * 同じ動画や楽曲でも、再生の都度URLogを作る
 * RelatedTimeは再生開始時刻
-* 個別コンテンツの正式URLを保存する
+* URLは実際に開いていたページのもの。YouTube系で動画IDを確認できたときだけ、
+  プレイリストやアルバムのパラメータを落とした正式URLを組み立てる
 * タイトルは取得できた正式タイトルを使用する
+* TimeIsは同じタイトルの再生が1分以内に続いていれば1本にまとめる。
+  そのため、TimeIs1本に対してURLogが複数並ぶことがある
+
+同じURLが閲覧区間（§7.1）としても届いた場合、URLogは再生側だけを残す。
+YouTube・YouTube Musicは閲覧区間からは一切URLogを作らない。
+閲覧URLには`&list=`などが付いて再生URLと一致せず、
+トップページや検索結果まで登録されてしまうため。
 
 ### 8.2 Androidアプリ
 
 対象：
 
-* YouTubeアプリ
-* YouTube Musicアプリ
+* YouTubeアプリ・YouTube Musicアプリ
+* MediaSessionを持つその他のアプリ（自アプリを除く）
 
 取得優先順位：
 
@@ -275,26 +288,29 @@ Chrome操作は、他のWindowsアプリと同じ条件でTimeIs化する。
 
 動画IDを確認できた場合は、そこから正規URLを組み立ててURLogにする。
 サムネイルURIのパスに入っているのは動画IDそのものなので、これは推測ではない。
+**動画IDの取り出しはYouTube・YouTube Musicアプリのときだけ行う。**
+他のアプリのアートURIがたまたま同じ形をしていても、
+それがYouTubeの動画IDである保証がないため。
 
 `METADATA_KEY_MEDIA_ID` は使わない。書式が動画IDと同じ11文字であっても
 動画IDとは限らず、プレイリスト内の項目IDなど別のものが入りうる。
 取り違えると存在しないURLを作り、gkillがそれを取得しに行って
 エラーページのタイトルを保存してしまう。
-誤ったURLを残すくらいなら、URL無しのTimeIsにする。
+誤ったURLを残すくらいなら、URL無しのTimeIsだけにする。
 
-動画IDを確認できなかった場合は、**TimeIsとして記録する**。
+URLの有無によらず、再生区間は**TimeIsとして記録する**。
 
 * Titleは「タイトル - アーティスト」。アーティストを取得できなければタイトルのみ
 * 区間は収集側が記録した壁時計の開始・終了。終了時刻が無い収集元では開始時刻に実再生秒数を足す
-* タイトルを取得できなかった再生は記録しない。区間だけではアプリ利用のTimeIsと変わらないため
+* タイトルを取得できなかった再生はTimeIsにしない。区間だけではアプリ利用のTimeIsと変わらないため
 * 30秒未満を落とす条件はURLogと共通
 
 検索URLや推測したURLは生成しない。Kmemoへの代替記録も行わない。
 TimeIsに載せるのはMediaSessionから観測できたタイトル・アーティスト・区間だけで、
 URLの代わりを埋め合わせることはしない。
 
-YouTube MusicのTimeIsは、同じ時間帯のアプリ利用TimeIs（11.2）と重なる。
-アプリ利用は「YouTube Musicを開いていた区間」、こちらは「何を再生したか」で、
+再生のTimeIsは、同じ時間帯のアプリ利用TimeIs（11.2）と重なる。
+アプリ利用は「そのアプリを開いていた区間」、こちらは「何を再生したか」で、
 記録している事実が違うため両方残す。
 
 WindowsとAndroidの再生履歴は統合しない。
@@ -492,7 +508,7 @@ Windows側と同じKyou変換規則を使用する。
 3. ウィンドウイベントをTimeIsセッションへ変換
 4. Chrome履歴をURLog候補へ変換
 5. 不要なWebページをClaudeが除外
-6. YouTube・YouTube Musicの実再生時間を集計
+6. 動画・音楽の実再生時間を集計
 7. 通知更新をまとめる
 8. Wi-Fi、Bluetooth、充電の短時間切断を結合
 9. gkill ApplicationConfigを取得
@@ -555,7 +571,7 @@ Claudeに禁止する処理：
 7. Android常駐収集アプリ
 8. Android Chrome履歴取得
 9. Android通知収集
-10. Android YouTube・YouTube Music取得
+10. Androidメディア再生取得
 11. AndroidログのX1 Yogaへの転送
 12. セッション正規化処理
 13. Claude Code SKILL
@@ -573,7 +589,7 @@ Claudeに禁止する処理：
 * Windows利用TimeIs
 * 操作したアプリ・ウィンドウのTimeIs
 * Chrome閲覧URLog
-* YouTube・YouTube Music URLog
+* 動画・音楽再生TimeIs（URLを確定できたものはURLogも）
 * Wi-Fi TimeIs
 * Bluetooth TimeIs
 * 充電TimeIs
@@ -584,7 +600,7 @@ Claudeに禁止する処理：
 * 端末利用TimeIs
 * アプリ利用TimeIs
 * Chrome閲覧URLog
-* YouTube・YouTube Music URLog
+* 動画・音楽再生TimeIs（URLを確定できたものはURLogも）
 * Wi-Fi TimeIs
 * Bluetooth TimeIs
 * 充電TimeIs

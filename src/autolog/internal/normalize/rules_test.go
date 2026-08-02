@@ -191,12 +191,45 @@ func TestMediaPlayStillRecordsYouTube(t *testing.T) {
 	if got := len(proposalsBySource(result, SourceBrowser)); got != 0 {
 		t.Errorf("browser 由来 = %d 件, want 0", got)
 	}
-	media := proposalsBySource(result, SourceMedia)
-	if len(media) != 1 {
-		t.Fatalf("media 由来 = %d 件, want 1", len(media))
+	urlogs := proposalsByKind(result, SourceMedia, KindURLog)
+	if len(urlogs) != 1 {
+		t.Fatalf("URLog = %d 件, want 1", len(urlogs))
 	}
-	if media[0].URL != "https://www.youtube.com/watch?v=abc123" {
-		t.Errorf("URL = %q", media[0].URL)
+	if urlogs[0].URL != "https://www.youtube.com/watch?v=abc123" {
+		t.Errorf("URL = %q", urlogs[0].URL)
+	}
+	if got := len(proposalsByKind(result, SourceMedia, KindTimeIs)); got != 1 {
+		t.Errorf("TimeIs = %d 件, want 1", got)
+	}
+}
+
+func TestBrowserViewSkipsURLAlreadyRecordedAsMediaPlay(t *testing.T) {
+	// YouTube 以外のサイトは閲覧区間としても届く。
+	// 同じURLを再生として URLog にしたなら、閲覧側は作らない。
+	const url = "https://example.com/video/1"
+	result := runNormalize(t, []*rawlog.Event{
+		browserEvent(t, "v1", 0, 5*min, url),
+		event(t, "m1", rawlog.EventMediaPlay, 0, durationPtr(5*min), rawlog.MediaPlayPayload{
+			Service: rawlog.ServiceWeb, URL: url, Title: "動画タイトル", PlayedSeconds: 300,
+		}),
+	}, 60*min)
+
+	if got := len(proposalsBySource(result, SourceBrowser)); got != 0 {
+		t.Errorf("browser 由来 = %d 件, want 0", got)
+	}
+	if got := len(proposalsByKind(result, SourceMedia, KindURLog)); got != 1 {
+		t.Errorf("URLog = %d 件, want 1", got)
+	}
+
+	// 再生していないページの閲覧は今までどおり残る。
+	other := runNormalize(t, []*rawlog.Event{
+		browserEvent(t, "v1", 0, 5*min, "https://example.com/other"),
+		event(t, "m1", rawlog.EventMediaPlay, 0, durationPtr(5*min), rawlog.MediaPlayPayload{
+			Service: rawlog.ServiceWeb, URL: url, Title: "動画タイトル", PlayedSeconds: 300,
+		}),
+	}, 60*min)
+	if got := len(proposalsBySource(other, SourceBrowser)); got != 1 {
+		t.Errorf("別ページの browser 由来 = %d 件, want 1", got)
 	}
 }
 
@@ -309,9 +342,10 @@ func TestMediaPlayMinimumPlayedSeconds(t *testing.T) {
 		want   int
 	}{
 		// 実再生時間が合計30秒以上（要件 §8.1）。
+		// 残るときは URLog と TimeIs の2件。
 		{name: "29秒は除外", played: 29, want: 0},
-		{name: "30秒ちょうどは記録", played: 30, want: 1},
-		{name: "31秒は記録", played: 31, want: 1},
+		{name: "30秒ちょうどは記録", played: 30, want: 2},
+		{name: "31秒は記録", played: 31, want: 2},
 	}
 
 	for _, tt := range tests {
@@ -426,12 +460,14 @@ func TestMediaPlayTagsOnlyBySource(t *testing.T) {
 		name    string
 		service rawlog.MediaService
 		url     string
+		want    int
 	}{
-		{name: "YouTubeのTimeIs", service: rawlog.ServiceYouTube},
-		{name: "YouTube MusicのTimeIs", service: rawlog.ServiceYouTubeMusic},
+		{name: "YouTubeのTimeIs", service: rawlog.ServiceYouTube, want: 1},
+		{name: "YouTube MusicのTimeIs", service: rawlog.ServiceYouTubeMusic, want: 1},
+		{name: "アプリの再生も同じ", service: rawlog.ServiceApp, want: 1},
 		{
 			name: "URLogも同じ", service: rawlog.ServiceYouTube,
-			url: "https://www.youtube.com/watch?v=abc",
+			url: "https://www.youtube.com/watch?v=abc", want: 2,
 		},
 	}
 
@@ -444,11 +480,13 @@ func TestMediaPlayTagsOnlyBySource(t *testing.T) {
 			}, 60*min)
 
 			plays := proposalsBySource(result, SourceMedia)
-			if len(plays) != 1 {
-				t.Fatalf("件数 = %d, want 1", len(plays))
+			if len(plays) != tt.want {
+				t.Fatalf("件数 = %d, want %d", len(plays), tt.want)
 			}
-			if plays[0].Source != SourceMedia {
-				t.Errorf("Source = %q, want %q", plays[0].Source, SourceMedia)
+			for _, play := range plays {
+				if play.Source != SourceMedia {
+					t.Errorf("Source = %q, want %q", play.Source, SourceMedia)
+				}
 			}
 		})
 	}
@@ -478,21 +516,72 @@ func TestMediaPlayCreatesOneURLogPerPlayback(t *testing.T) {
 		mediaEvent(t, "m2", 30*min, 90, url),
 	}, 60*min)
 
-	plays := proposalsBySource(result, SourceMedia)
-	if len(plays) != 2 {
-		t.Fatalf("件数 = %d, want 2", len(plays))
+	urlogs := proposalsByKind(result, SourceMedia, KindURLog)
+	if len(urlogs) != 2 {
+		t.Fatalf("URLog = %d 件, want 2", len(urlogs))
 	}
 	// RelatedTime は再生開始時刻。
-	if plays[0].RelatedTime.Sub(base()) != 0 || plays[1].RelatedTime.Sub(base()) != 30*min {
+	if urlogs[0].RelatedTime.Sub(base()) != 0 || urlogs[1].RelatedTime.Sub(base()) != 30*min {
 		t.Error("RelatedTime が再生開始時刻になっていない")
 	}
 }
 
-func TestMediaPlayWithURLDoesNotCreateTimeIs(t *testing.T) {
-	// URL を確定できた再生が作る Kyou は URLog のみ（要件 §8.1）。
-	// TimeIs も作ると同じ再生が二重に残る。
+func TestMediaPlayWithURLAlsoCreatesTimeIs(t *testing.T) {
+	// 再生していた区間は URL の有無によらず TimeIs にする。
+	// URL を確定できたら、それに加えて URLog も作る。
 	result := runNormalize(t, []*rawlog.Event{
 		mediaEvent(t, "m1", 0, 300, "https://www.youtube.com/watch?v=abc"),
+	}, 60*min)
+
+	urlogs := proposalsByKind(result, SourceMedia, KindURLog)
+	if len(urlogs) != 1 {
+		t.Fatalf("URLog = %d 件, want 1", len(urlogs))
+	}
+	timeIses := proposalsByKind(result, SourceMedia, KindTimeIs)
+	if len(timeIses) != 1 {
+		t.Fatalf("TimeIs = %d 件, want 1", len(timeIses))
+	}
+	if timeIses[0].Title != "動画タイトル" {
+		t.Errorf("Title = %q", timeIses[0].Title)
+	}
+	// 終了時刻を持たない収集元では実再生秒数から区間を作る。
+	if timeIses[0].StartTime.Sub(base()) != 0 || timeIses[0].EndTime.Sub(base()) != 5*min {
+		t.Errorf("区間 = %v..%v", timeIses[0].StartTime, timeIses[0].EndTime)
+	}
+	// 同じイベントから作っても種類が違えば別のIDになる。
+	if urlogs[0].ID == timeIses[0].ID {
+		t.Error("URLog と TimeIs が同じIDになった")
+	}
+}
+
+func TestMediaPlayWithURLMergesTimeIsBySameTitle(t *testing.T) {
+	// 同じタイトルの再生が続いていれば TimeIs は1本にまとめる。
+	// URLog は再生の都度作るので、TimeIs 1本に URLog が複数並ぶ。
+	const url = "https://www.youtube.com/watch?v=abc"
+	result := runNormalize(t, []*rawlog.Event{
+		mediaEvent(t, "m1", 0, 120, url),
+		mediaEvent(t, "m2", 150*sec, 120, url),
+	}, 60*min)
+
+	if got := len(proposalsByKind(result, SourceMedia, KindURLog)); got != 2 {
+		t.Errorf("URLog = %d 件, want 2", got)
+	}
+	timeIses := proposalsByKind(result, SourceMedia, KindTimeIs)
+	if len(timeIses) != 1 {
+		t.Fatalf("TimeIs = %d 件, want 1", len(timeIses))
+	}
+	if timeIses[0].StartTime.Sub(base()) != 0 || timeIses[0].EndTime.Sub(base()) != 270*sec {
+		t.Errorf("区間 = %v..%v", timeIses[0].StartTime, timeIses[0].EndTime)
+	}
+}
+
+func TestMediaPlayWithURLNeedsTitleForTimeIs(t *testing.T) {
+	// タイトルが無ければ何を再生したのか分からないので TimeIs にはしない。
+	// URL は観測できた事実なので URLog は残す。
+	result := runNormalize(t, []*rawlog.Event{
+		event(t, "m1", rawlog.EventMediaPlay, 0, durationPtr(5*min), rawlog.MediaPlayPayload{
+			Service: rawlog.ServiceWeb, URL: "https://example.com/video/1", PlayedSeconds: 300,
+		}),
 	}, 60*min)
 
 	plays := proposalsBySource(result, SourceMedia)
@@ -501,6 +590,30 @@ func TestMediaPlayWithURLDoesNotCreateTimeIs(t *testing.T) {
 	}
 	if plays[0].Kind != KindURLog {
 		t.Errorf("Kind = %q, want %q", plays[0].Kind, KindURLog)
+	}
+}
+
+func TestMediaPlayURLogObeysDenyList(t *testing.T) {
+	// 除外パターンに一致する URL は URLog にしない。
+	// 再生していた事実は残るので TimeIs は作る。
+	denyList, err := ParseDenyList(strings.NewReader("example.com/video/"))
+	if err != nil {
+		t.Fatalf("ParseDenyList: %v", err)
+	}
+
+	result := runNormalizeWith(t, []*rawlog.Event{
+		event(t, "m1", rawlog.EventMediaPlay, 0, durationPtr(5*min), rawlog.MediaPlayPayload{
+			Service: rawlog.ServiceWeb, URL: "https://example.com/video/1",
+			Title: "動画タイトル", PlayedSeconds: 300,
+		}),
+	}, Options{Cutoff: base().Add(60 * min), DenyList: denyList})
+
+	plays := proposalsBySource(result, SourceMedia)
+	if len(plays) != 1 {
+		t.Fatalf("件数 = %d, want 1", len(plays))
+	}
+	if plays[0].Kind != KindTimeIs {
+		t.Errorf("Kind = %q, want %q", plays[0].Kind, KindTimeIs)
 	}
 }
 

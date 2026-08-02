@@ -120,7 +120,7 @@ Chrome 拡張や Android は UTC (末尾 Z) で送ってくることがあるの
 | `MinWindowDuration` | 1分 | これ未満のウィンドウ操作は記録しない |
 | `MinViewDuration` | 30秒 | これ未満の閲覧は記録しない |
 | `MinPlayedSeconds` | 30秒 | これ未満しか再生していないものは記録しない |
-| `MinAppUsage` | 30秒 | これ未満のアプリ利用は記録しない |
+| `MinAppUsage` | 1分 | これ未満のアプリ利用は記録しない。PC 側の `MinWindowDuration` と揃えてある |
 | `WifiMergeWindow` | 30秒 | この時間内の再接続を結合する |
 | `BluetoothMergeWindow` | 1分 | 同上 |
 | `ChargeMergeWindow` | 30秒 | 同上 |
@@ -155,9 +155,24 @@ Chrome 拡張や Android は UTC (末尾 Z) で送ってくることがあるの
 `makeID(種別, 収集元, 元イベントID群)` を sha256 で計算します。
 同じ生ログからは常に同じ ID が出るので、台帳での重複判定に使えます。
 
+### 再生は TimeIs、URL があれば URLog も
+
+再生していた区間は常に TimeIs にします。URL を確定できた再生には、それに加えて
+URLog も作ります。区間と「何を再生したか」は別の事実だからです。
+
+TimeIs は同じタイトルの再生が1分以内に続いていれば1本にまとめるので、
+TimeIs 1本に対して URLog が複数並ぶことがあります。
+`makeID` は種別を含めて計算するので、同じイベントから2つ作ってもIDは衝突しません。
+
 ### 動画・音楽はブラウザ経路から除く
 
-動画サイトの URL はメディアとして記録するため、ブラウザ閲覧の経路からは除きます。
+同じページが閲覧区間としても届くため、そのままだと同じ URL の URLog が2件になります。
+`mediaPlays` を `browserViews` より先に走らせ、再生として URLog にした URL は
+閲覧側で落とします。
+
+YouTube・YouTube Music はホスト単位でブラウザ経路から除きます。
+閲覧 URL には `&list=` などが付いて再生 URL と一致せず、
+トップページや検索結果まで URLog になってしまうためです。
 判定はホスト名で行います（URL に文字列が含まれるかで判定すると誤爆します）。
 
 ## internal/gkillclient — gkill への書き込み
