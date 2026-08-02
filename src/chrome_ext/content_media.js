@@ -371,7 +371,15 @@
 
   // タブを閉じる・別ページへ移るときは最後の報告を試みる。
   // 届かなくても、直前の途中経過が Service Worker 側に残っている。
-  addEventListener("pagehide", () => report(true));
+  //
+  // 報告のあとは play を捨てる。bfcache から復元されて再生が続くことがあり、
+  // 捨てないと累計の playedSeconds を持ったまま同じ playId の報告が再開され、
+  // 確定済みの分を含む2本目のイベントができてしまう。
+  // 復元後の再生は tick が新しい playId で数え直す。
+  addEventListener("pagehide", () => {
+    report(true);
+    play = null;
+  });
   addEventListener("visibilitychange", () => {
     if (document.visibilityState === "hidden") {
       report(false);

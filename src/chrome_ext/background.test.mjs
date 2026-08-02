@@ -165,7 +165,7 @@ test("複数の再生報告が並行しても、pendingPlays が後勝ちで消�
     "並行した報告の片方が消えた");
 });
 
-test("同じ確定が2回積まれても event_id が同じで、受け口の重複排除に畳まれる形になる", async () => {
+test("確定済みと同じ内容の再送は、新しいイベントを作らない", async () => {
   store = {};
   const now = Date.now();
   const report = {
@@ -180,13 +180,59 @@ test("同じ確定が2回積まれても event_id が同じで、受け口の重
   };
 
   await sendMediaProgress(report);
-  // 確定済みの pending は消えているので、同じ報告の再送は改めて確定される。
+  // 墓標 (finalizedPlays) が累計値を覚えているので、進んでいない再送は捨てられる。
   await sendMediaProgress(report);
 
-  const queue = store.queue || [];
-  const ids = queue.filter((event) => event.event_type === "media_play").map((event) => event.event_id);
-  assert.equal(ids.length, 2);
-  assert.equal(ids[0], ids[1], "同じ確定から別の event_id ができた");
+  const plays = (store.queue || []).filter((event) => event.event_type === "media_play");
+  assert.equal(plays.length, 1, "確定済みの再送から新しいイベントができた");
+});
+
+test("確定後に同じ再生が続いた場合、続きは差分の区間になり二重計上しない", async () => {
+  // スリープ復帰の典型: 報告が途絶えて心拍が確定させたあと、
+  // ページ側は生きていて累計の playedSeconds のまま報告を再開する。
+  store = {};
+  const now = Date.now();
+  const firstEnd = now - 200_000;
+  store.pendingPlays = {
+    resumed: {
+      service: "web",
+      url: "https://example.com/long",
+      videoId: "",
+      title: "長い動画",
+      artist: "",
+      playedSeconds: 50,
+      startedAt: now - 300_000,
+      endedAt: firstEnd,
+      updatedAt: now - 120_000, // STALE_MS (90秒) より古い
+      finished: false,
+    },
+  };
+
+  // 心拍が途絶えた再生を確定させる (1本目: 50秒)。
+  await fireAlarm();
+
+  // ページが累計 80 秒で報告を再開して終わる。
+  await sendMediaProgress({
+    playId: "resumed",
+    service: "web",
+    url: "https://example.com/long",
+    title: "長い動画",
+    playedSeconds: 80,
+    startedAt: now - 300_000,
+    endedAt: now - 1_000,
+    finished: true,
+  });
+
+  const plays = (store.queue || []).filter((event) => event.event_type === "media_play");
+  assert.equal(plays.length, 2, "確定と続きで2本になるはず");
+  assert.equal(plays[0].payload.played_seconds, 50);
+  assert.equal(plays[1].payload.played_seconds, 30, "続きは差分 (80-50) だけを数える");
+  assert.equal(plays[1].start_time, new Date(firstEnd).toISOString(),
+    "続きの区間は前回の終了から始まる");
+  assert.notEqual(plays[0].event_id, plays[1].event_id);
+
+  const total = plays.reduce((sum, event) => sum + event.payload.played_seconds, 0);
+  assert.equal(total, 80, "合計が実再生時間と一致する (二重計上しない)");
 });
 
 test("アラームの心拍で報告が途切れた再生が確定する", async () => {
