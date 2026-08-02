@@ -169,3 +169,38 @@ func TestLedgerPersistsAcrossReopen(t *testing.T) {
 		t.Error("開き直したら記録が消えている")
 	}
 }
+
+func TestCoveredCount(t *testing.T) {
+	// 一部だけが書き込み済みの提案 (遅着イベントが確定済み区間を延ばした形) を
+	// 書き込み側が判別できるよう、件数がそのまま返ること。
+	l := openTestLedger(t)
+	ctx := context.Background()
+
+	if err := l.Record(ctx, "p1", "timeis", "autolog_window", "Phone", "kyou-1", []string{"a1", "a2"}); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+
+	tests := []struct {
+		name        string
+		eventIDs    []string
+		wantCovered int
+		wantTotal   int
+	}{
+		{name: "全部書き込み済み", eventIDs: []string{"a1", "a2"}, wantCovered: 2, wantTotal: 2},
+		{name: "一部だけ書き込み済み", eventIDs: []string{"a2", "a3"}, wantCovered: 1, wantTotal: 2},
+		{name: "どれも未書き込み", eventIDs: []string{"b1"}, wantCovered: 0, wantTotal: 1},
+		{name: "重複IDは1つに数える", eventIDs: []string{"a1", "a1", "a3"}, wantCovered: 1, wantTotal: 2},
+		{name: "空", eventIDs: nil, wantCovered: 0, wantTotal: 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			covered, total, err := l.CoveredCount(ctx, "timeis", "autolog_window", "Phone", tt.eventIDs)
+			if err != nil {
+				t.Fatalf("CoveredCount: %v", err)
+			}
+			if covered != tt.wantCovered || total != tt.wantTotal {
+				t.Errorf("CoveredCount = (%d, %d), want (%d, %d)", covered, total, tt.wantCovered, tt.wantTotal)
+			}
+		})
+	}
+}

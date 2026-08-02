@@ -10,7 +10,10 @@
 // **別の id** を持つ提案が再構成されるため、id の突合だけでは素通りしてしまう。
 // そこで書き込んだ提案の元イベントも (kind, source, device, event_id) で記録し、
 // 「元イベントがすべて記録済み」の提案は既に書いた区間の断片とみなして弾く。
-// 新しい観測が1つでも混ざっていれば通るので、正当な更新は妨げない。
+//
+// 一部だけが記録済みの提案（遅れて届いた生ログが確定済み区間を延ばした形）を
+// どう扱うかは収集元によって違うため、台帳は件数 (CoveredCount) を返すだけにし、
+// 判断は書き込み側 (gkillclient.Writer) に置く。
 //
 // 要件 §18 は「二重登録防止」を初期スコープ外としているが、
 // §17 の「失敗分を次回再処理可能にする」を満たすには最低限これが要る。
@@ -155,6 +158,20 @@ func (l *Ledger) Record(ctx context.Context, proposalID, kind, source, device, k
 // 台帳を導入する前に書き込んだ分には元イベントの記録が無いので、
 // その範囲の断片は検出できない（一度書かれてしまうと以後は検出できる）。
 func (l *Ledger) IsCovered(ctx context.Context, kind, source, device string, eventIDs []string) (bool, error) {
+	covered, total, err := l.CoveredCount(ctx, kind, source, device, eventIDs)
+	if err != nil {
+		return false, err
+	}
+	return total > 0 && covered == total, nil
+}
+
+// CoveredCount は提案の元イベントのうち記録済みの件数と、重複を除いた総数を返す。
+//
+// covered == total なら既に書いた区間の断片（IsCovered と同じ判定）。
+// 0 < covered < total は「書き込み済みイベントと新しいイベントが混ざった提案」で、
+// 遅れて届いた生ログが確定済みの区間を延ばしたときにできる。
+// これをどう扱うかは収集元によって違うので、判断は書き込み側 (gkillclient.Writer) が行う。
+func (l *Ledger) CoveredCount(ctx context.Context, kind, source, device string, eventIDs []string) (covered int, total int, err error) {
 	unique := make([]string, 0, len(eventIDs))
 	seen := map[string]struct{}{}
 	for _, id := range eventIDs {
@@ -165,12 +182,11 @@ func (l *Ledger) IsCovered(ctx context.Context, kind, source, device string, eve
 		unique = append(unique, id)
 	}
 	if len(unique) == 0 {
-		return false, nil
+		return 0, 0, nil
 	}
 
 	// IN のプレースホルダ数に上限があるので分けて数える。
 	const chunkSize = 500
-	covered := 0
 	for start := 0; start < len(unique); start += chunkSize {
 		chunk := unique[start:min(start+chunkSize, len(unique))]
 
@@ -187,11 +203,11 @@ func (l *Ledger) IsCovered(ctx context.Context, kind, source, device string, eve
 			params...)
 		var count int
 		if err := row.Scan(&count); err != nil {
-			return false, fmt.Errorf("failed to check event coverage: %w", err)
+			return 0, 0, fmt.Errorf("failed to check event coverage: %w", err)
 		}
 		covered += count
 	}
-	return covered == len(unique), nil
+	return covered, len(unique), nil
 }
 
 // Count は記録件数を返す。

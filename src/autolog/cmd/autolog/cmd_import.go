@@ -95,9 +95,12 @@ func newImportCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			from, err := resolveFrom(ctx, store, sinceFlag)
+			from, backfillMark, err := resolveFrom(ctx, store, sinceFlag)
 			if err != nil {
 				return err
+			}
+			if !backfillMark.IsZero() && backfillMark.Equal(from) {
+				fmt.Fprintf(out, "遅れて届いた生ログがあるため %s まで遡って読み直す\n", rawlog.FormatTime(from))
 			}
 
 			events, err := store.Range(ctx, rawlog.RangeQuery{From: from, To: cutoff})
@@ -178,6 +181,9 @@ func newImportCmd() *cobra.Command {
 
 			fmt.Fprintf(out, "  書き込み:   %d 件\n", stats.Written)
 			fmt.Fprintf(out, "  台帳で除外: %d 件\n", stats.Skipped)
+			if stats.Overlapped > 0 {
+				fmt.Fprintf(out, "  重なりで除外: %d 件 (遅着イベントが確定済み区間を延ばした分)\n", stats.Overlapped)
+			}
 			fmt.Fprintf(out, "  失敗:       %d 件\n", stats.Failed)
 			fmt.Fprintf(out, "付与したタグ: %d 件\n", stats.TagsAdded)
 
@@ -213,6 +219,13 @@ func newImportCmd() *cobra.Command {
 			}
 			if err := store.SetCursor(ctx, rawlog.CursorNormalize, cursor); err != nil {
 				return err
+			}
+			// 読み直した低水位マークを消す。取り込みの最中に新しい遅着イベントが
+			// マークを更新していたら値が一致せず、消えずに次回へ引き継がれる。
+			if !backfillMark.IsZero() {
+				if err := store.ClearBackfillMark(ctx, backfillMark); err != nil {
+					return err
+				}
 			}
 			fmt.Fprintf(out, "\nカーソルを %s まで進めた\n", rawlog.FormatTime(cursor))
 			return nil

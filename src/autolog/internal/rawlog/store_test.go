@@ -386,3 +386,148 @@ func TestOpenStateIntervalRoundTrip(t *testing.T) {
 		t.Fatalf("入れ替え後 = %+v, want TestWifi のみ", opens)
 	}
 }
+
+func TestPutBatchMarksBackfillForLateEvents(t *testing.T) {
+	// 区間イベントは終わってから届くので、取り込みがカーソルを進めた後に
+	// カーソルより過去の start_time で入ることがある。
+	// そのとき低水位マークが残り、import が読み直せること。
+	store := openTestStore(t)
+	ctx := context.Background()
+	cursor := baseTime()
+
+	if err := store.SetCursor(ctx, CursorNormalize, cursor); err != nil {
+		t.Fatalf("SetCursor: %v", err)
+	}
+
+	// カーソルより未来のイベントはマークを作らない。
+	future := mustEvent(t, "future-1", Device("Phone"), EventAppUsage,
+		cursor.Add(time.Hour), timePtrOf(cursor.Add(2*time.Hour)), AppUsagePayload{AppLabel: "Chrome"})
+	if _, err := store.PutBatch(ctx, []*Event{future}); err != nil {
+		t.Fatalf("PutBatch(未来): %v", err)
+	}
+	if _, ok, err := store.GetCursor(ctx, CursorBackfill); err != nil || ok {
+		t.Fatalf("未来のイベントでマークができた (ok=%v, err=%v)", ok, err)
+	}
+
+	// カーソルより過去のイベントが入るとマークができる。
+	late := mustEvent(t, "late-1", Device("Phone"), EventAppUsage,
+		cursor.Add(-30*time.Minute), timePtrOf(cursor.Add(time.Hour)), AppUsagePayload{AppLabel: "YouTube Music"})
+	if _, err := store.PutBatch(ctx, []*Event{late}); err != nil {
+		t.Fatalf("PutBatch(遅着): %v", err)
+	}
+	mark, ok, err := store.GetCursor(ctx, CursorBackfill)
+	if err != nil {
+		t.Fatalf("GetCursor(backfill): %v", err)
+	}
+	if !ok {
+		t.Fatal("遅着イベントを入れたのにマークが無い")
+	}
+	if !mark.Equal(cursor.Add(-30 * time.Minute)) {
+		t.Errorf("マーク = %s, want %s", mark, cursor.Add(-30*time.Minute))
+	}
+
+	// さらに過去のイベントが入るとマークが下がる。
+	older := mustEvent(t, "late-2", Device("Phone"), EventNotification,
+		cursor.Add(-2*time.Hour), nil, NotificationPayload{AppLabel: "Gmail", Title: "件名"})
+	if _, err := store.PutBatch(ctx, []*Event{older}); err != nil {
+		t.Fatalf("PutBatch(さらに過去): %v", err)
+	}
+	mark, _, err = store.GetCursor(ctx, CursorBackfill)
+	if err != nil {
+		t.Fatalf("GetCursor(backfill): %v", err)
+	}
+	if !mark.Equal(cursor.Add(-2 * time.Hour)) {
+		t.Errorf("マーク = %s, want %s (より過去へ下がるべき)", mark, cursor.Add(-2*time.Hour))
+	}
+
+	// 既存マークより新しい遅着ではマークが動かない。
+	between := mustEvent(t, "late-3", Device("Phone"), EventNotification,
+		cursor.Add(-time.Hour), nil, NotificationPayload{AppLabel: "Gmail", Title: "別の件名"})
+	if _, err := store.PutBatch(ctx, []*Event{between}); err != nil {
+		t.Fatalf("PutBatch(マークとカーソルの間): %v", err)
+	}
+	mark, _, err = store.GetCursor(ctx, CursorBackfill)
+	if err != nil {
+		t.Fatalf("GetCursor(backfill): %v", err)
+	}
+	if !mark.Equal(cursor.Add(-2 * time.Hour)) {
+		t.Errorf("マーク = %s, want %s (新しい遅着で上がってはならない)", mark, cursor.Add(-2*time.Hour))
+	}
+}
+
+func TestPutBatchDoesNotMarkBackfillForDuplicates(t *testing.T) {
+	// 再送 (実際には挿入されない) ではマークを作らない。
+	// 作ってしまうと、Android の再送のたびに import が過去を読み直すことになる。
+	store := openTestStore(t)
+	ctx := context.Background()
+	cursor := baseTime()
+
+	late := mustEvent(t, "late-1", Device("Phone"), EventAppUsage,
+		cursor.Add(-time.Hour), timePtrOf(cursor.Add(-30*time.Minute)), AppUsagePayload{AppLabel: "Chrome"})
+	if _, err := store.PutBatch(ctx, []*Event{late}); err != nil {
+		t.Fatalf("PutBatch(1回目): %v", err)
+	}
+
+	if err := store.SetCursor(ctx, CursorNormalize, cursor); err != nil {
+		t.Fatalf("SetCursor: %v", err)
+	}
+
+	if _, err := store.PutBatch(ctx, []*Event{late}); err != nil {
+		t.Fatalf("PutBatch(再送): %v", err)
+	}
+	if _, ok, err := store.GetCursor(ctx, CursorBackfill); err != nil || ok {
+		t.Fatalf("再送でマークができた (ok=%v, err=%v)", ok, err)
+	}
+}
+
+func TestPutBatchWithoutCursorDoesNotMarkBackfill(t *testing.T) {
+	// 一度も取り込んでいなければマークは不要 (初回は7日前から読む)。
+	store := openTestStore(t)
+	ctx := context.Background()
+
+	e := mustEvent(t, "ev-1", Device("Phone"), EventNotification,
+		baseTime(), nil, NotificationPayload{AppLabel: "Gmail", Title: "件名"})
+	if _, err := store.PutBatch(ctx, []*Event{e}); err != nil {
+		t.Fatalf("PutBatch: %v", err)
+	}
+	if _, ok, err := store.GetCursor(ctx, CursorBackfill); err != nil || ok {
+		t.Fatalf("カーソルが無いのにマークができた (ok=%v, err=%v)", ok, err)
+	}
+}
+
+func TestClearBackfillMark(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	cursor := baseTime()
+
+	if err := store.SetCursor(ctx, CursorNormalize, cursor); err != nil {
+		t.Fatalf("SetCursor: %v", err)
+	}
+	late := mustEvent(t, "late-1", Device("Phone"), EventNotification,
+		cursor.Add(-time.Hour), nil, NotificationPayload{AppLabel: "Gmail", Title: "件名"})
+	if _, err := store.PutBatch(ctx, []*Event{late}); err != nil {
+		t.Fatalf("PutBatch: %v", err)
+	}
+	mark, _, err := store.GetCursor(ctx, CursorBackfill)
+	if err != nil {
+		t.Fatalf("GetCursor(backfill): %v", err)
+	}
+
+	// 値が違えば消えない。取り込み中に新しい遅着が来た場合、次回へ引き継ぐため。
+	if err := store.ClearBackfillMark(ctx, mark.Add(time.Minute)); err != nil {
+		t.Fatalf("ClearBackfillMark(不一致): %v", err)
+	}
+	if _, ok, _ := store.GetCursor(ctx, CursorBackfill); !ok {
+		t.Fatal("値が一致しないのにマークが消えた")
+	}
+
+	// 値が一致すれば消える。
+	if err := store.ClearBackfillMark(ctx, mark); err != nil {
+		t.Fatalf("ClearBackfillMark: %v", err)
+	}
+	if _, ok, _ := store.GetCursor(ctx, CursorBackfill); ok {
+		t.Fatal("マークが消えていない")
+	}
+}
+
+func timePtrOf(t time.Time) *time.Time { return &t }

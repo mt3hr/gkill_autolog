@@ -18,6 +18,17 @@ const (
 	// CursorNormalize は normalize が処理し終えた位置。
 	// この時刻より前のイベントは Kyou 提案へ変換済みとみなす。
 	CursorNormalize = "normalize"
+
+	// CursorBackfill は「カーソルより過去の start_time を持つイベントが
+	// 後から挿入された」ことを表す低水位マーク。挿入されたそのイベントの
+	// 最小 start_time が入る。
+	//
+	// 区間イベントは終わってから届く。Android の使用中アプリや再生中の音楽、
+	// Chrome 拡張が溜めていた閲覧は、取り込みがカーソルを進めた後に
+	// カーソルより過去の start_time で届くことがある。マークが無いと
+	// import は二度とその範囲を読まず、届いたイベントが恒久に取り込まれない。
+	// import はこのマークまで開始位置を引き戻し、処理し終えたら消す。
+	CursorBackfill = "backfill"
 )
 
 // Store は生ログの追記専用ストア。
@@ -158,22 +169,19 @@ ON CONFLICT(device, event_id) DO NOTHING
 // (device, event_id) が既に存在する場合は何もしない（Android や Chrome 拡張の再送を冪等にするため）。
 // 追加されたときだけ true を返す。
 func (s *Store) Put(ctx context.Context, e *Event) (bool, error) {
-	if err := e.Validate(); err != nil {
-		return false, fmt.Errorf("invalid event: %w", err)
-	}
-	result, err := s.db.ExecContext(ctx, insertEventSQL, args(e)...)
+	inserted, err := s.PutBatch(ctx, []*Event{e})
 	if err != nil {
-		return false, fmt.Errorf("failed to insert event %s: %w", e.EventID, err)
+		return false, err
 	}
-	affected, err := result.RowsAffected()
-	if err != nil {
-		return false, fmt.Errorf("failed to read affected rows for event %s: %w", e.EventID, err)
-	}
-	return affected > 0, nil
+	return inserted > 0, nil
 }
 
 // PutBatch は複数イベントをひとつのトランザクションで追記し、実際に追加された件数を返す。
 // 1件でも不正なイベントがあればトランザクション全体を中止する。
+//
+// 処理カーソルより過去の start_time を持つイベントが実際に追加された場合は、
+// 同じトランザクションで低水位マーク (CursorBackfill) を更新する。
+// 遅れて届いた区間イベントを import が読み直せるようにするため。
 func (s *Store) PutBatch(ctx context.Context, events []*Event) (int, error) {
 	for _, e := range events {
 		if err := e.Validate(); err != nil {
@@ -192,6 +200,7 @@ func (s *Store) PutBatch(ctx context.Context, events []*Event) (int, error) {
 	defer stmt.Close()
 
 	inserted := 0
+	var earliestInserted time.Time
 	for _, e := range events {
 		result, err := stmt.ExecContext(ctx, args(e)...)
 		if err != nil {
@@ -201,12 +210,86 @@ func (s *Store) PutBatch(ctx context.Context, events []*Event) (int, error) {
 		if err != nil {
 			return 0, errors.Join(fmt.Errorf("failed to read affected rows for event %s: %w", e.EventID, err), tx.Rollback())
 		}
-		inserted += int(affected)
+		if affected > 0 {
+			inserted++
+			if earliestInserted.IsZero() || e.StartTime.Before(earliestInserted) {
+				earliestInserted = e.StartTime
+			}
+		}
+	}
+	if inserted > 0 {
+		if err := markBackfill(ctx, tx, earliestInserted); err != nil {
+			return 0, errors.Join(err, tx.Rollback())
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return 0, fmt.Errorf("failed to commit: %w", err)
 	}
 	return inserted, nil
+}
+
+// markBackfill は、処理カーソルより過去のイベントが後から入ったことを
+// 低水位マークとして残す。イベントの挿入と同じトランザクションで呼ぶこと。
+//
+// カーソルがまだ無い（一度も取り込んでいない）間は何もしない。
+// 既にもっと過去のマークがあれば、そのままにする。
+func markBackfill(ctx context.Context, tx *sql.Tx, earliest time.Time) error {
+	var cursorStr string
+	err := tx.QueryRowContext(ctx, `SELECT value FROM process_cursor WHERE name = ?`, CursorNormalize).Scan(&cursorStr)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("failed to read cursor for backfill mark: %w", err)
+	}
+	cursor, err := ParseTime(cursorStr)
+	if err != nil {
+		return fmt.Errorf("cursor %s: %w", CursorNormalize, err)
+	}
+	if !earliest.Before(cursor) {
+		return nil
+	}
+
+	var markStr string
+	err = tx.QueryRowContext(ctx, `SELECT value FROM process_cursor WHERE name = ?`, CursorBackfill).Scan(&markStr)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		// マークが無ければ作る。
+	case err != nil:
+		return fmt.Errorf("failed to read backfill mark: %w", err)
+	default:
+		mark, err := ParseTime(markStr)
+		if err != nil {
+			return fmt.Errorf("backfill mark: %w", err)
+		}
+		if !mark.After(earliest) {
+			// 既にもっと過去（または同じ）を指している。
+			return nil
+		}
+	}
+
+	_, err = tx.ExecContext(ctx,
+		`INSERT INTO process_cursor (name, value, updated_at) VALUES (?, ?, ?)
+		 ON CONFLICT(name) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+		CursorBackfill, storageTime(earliest), storageTime(time.Now()))
+	if err != nil {
+		return fmt.Errorf("failed to set backfill mark: %w", err)
+	}
+	return nil
+}
+
+// ClearBackfillMark は低水位マークを消す。
+//
+// マークの値が ifValue のときだけ消す。import が読んだ後に別の遅着イベントが
+// マークを更新していたら、そのまま残して次回の取り込みに引き継ぐ。
+func (s *Store) ClearBackfillMark(ctx context.Context, ifValue time.Time) error {
+	_, err := s.db.ExecContext(ctx,
+		`DELETE FROM process_cursor WHERE name = ? AND value = ?`,
+		CursorBackfill, storageTime(ifValue))
+	if err != nil {
+		return fmt.Errorf("failed to clear backfill mark: %w", err)
+	}
+	return nil
 }
 
 // storageTime は保存用の時刻文字列を返す。
