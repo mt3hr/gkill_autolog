@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -102,13 +103,17 @@ func writeJSONL[T any](path string, items []T) error {
 	if err != nil {
 		return fmt.Errorf("failed to create %s: %w", path, err)
 	}
-	defer file.Close()
 
 	encoder := json.NewEncoder(file)
 	for _, item := range items {
 		if err := encoder.Encode(item); err != nil {
-			return fmt.Errorf("failed to write %s: %w", path, err)
+			return errors.Join(fmt.Errorf("failed to write %s: %w", path, err), file.Close())
 		}
+	}
+	// Close まで見届ける。ディスク満杯は Close で初めて返ることがあり、
+	// 握り潰すと欠けたファイルを「書き出した」と案内してしまう。
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("failed to write %s: %w", path, err)
 	}
 	return nil
 }

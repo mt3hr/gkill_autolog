@@ -22,8 +22,9 @@ gkill の追加 API は書き込み先リポジトリを指定できないため
 .\src\scripts\setup_auto_users.ps1 -UserPrefix myuser_auto_ -Devices Laptop
 ```
 
-管理者アカウントが要ります。`do_initialize` で既定のリポジトリも作られるので、
-置き場所は既定のままで構いません。
+管理者アカウントと、PATH に通った `sqlite3.exe` が要ります
+（既存のアカウントと発行済みのリセットトークンを `account.db` から直接読むため）。
+`do_initialize` で既定のリポジトリも作られるので、置き場所は既定のままで構いません。
 
 ### 2. 閲覧用の設定を追加する
 
@@ -63,6 +64,10 @@ GKILL_AUTO_PASSWORD_SHA256=
 AUTOLOG_SCREENSHOT_INTERVAL=15m
 ```
 
+autolog.env は `run_collect.ps1` / `run_import.ps1` が読み込みます。
+古い登録（autolog.exe を直接起動するタスク）のままだと常駐収集には効かないので、
+変えても反映されない場合は `register_tasks.ps1` を実行し直してください。
+
 一度だけ試すなら `autolog collect --screenshot-interval 15m` でも指定できます。
 フラグのほうが設定ファイルより優先されます。撮影そのものを止めるのは
 `--no-screenshot` です。
@@ -89,12 +94,16 @@ npm run build
 ```powershell
 .\src\scripts\register_tasks.ps1 -WhatIfOnly   # 内容の確認
 .\src\scripts\register_tasks.ps1
+.\src\scripts\register_tasks.ps1 -Unregister   # 消すとき
 ```
+
+`gkill_autolog_collect`（ログオン時に常駐）と
+`gkill_autolog_import`（毎日4:00）の2つが作られます。管理者権限は要りません。
 
 収集はサービスではなくログオン時のタスクにします。
 前面ウィンドウとセッションの状態は、対話セッションに属するプロセスからしか取れません。
 
-同期スクリプトから取り込みを呼んでいるなら、定期実行のタスクは不要です。
+同期スクリプトから取り込みを呼んでいるなら、`gkill_autolog_import` は不要です。
 
 ### 同期スクリプトへの組み込み
 
@@ -108,7 +117,7 @@ if ($LASTEXITCODE -ne 0) { echo "取り込みに失敗しました。次回や�
 # 端末別ユーザーの rep を運ぶ。端末名はアカウント名から取り出す。
 Get-ChildItem (Join-Path $HOME "gkill/datas") -Directory -Filter "myuser_auto_*" | ForEach-Object {
     $auto_device = $_.Name -replace '^myuser_auto_', ''
-    foreach ($auto_db in 'TimeIs', 'URLog', 'Kmemo', 'Tag', 'Text') {
+    foreach ($auto_db in 'TimeIs', 'URLog', 'Kmemo', 'Tag') {
         $auto_src = Join-Path $_.FullName "$auto_db.db"
         if (Test-Path $auto_src) {
             gkill_server dvnf copy -f --device $auto_device $auto_src "Auto$auto_db.db"
@@ -160,33 +169,47 @@ printf '%s' 'パスワード' | sha256sum | cut -d' ' -f1
 
 ### 2. autolog を入れる
 
-PC でビルドして配り、端末で取り込みます。
+PC でビルドして端末へ送り、Termux の PATH に置きます。
 
 ```powershell
-npm run deploy_android
+npm run build_android_arm64
+adb push release/android_arm64/autolog /sdcard/autolog
 ```
 
 ```sh
-~/.termux/tasker/update_autolog.sh
+# Termux 側
+cp /sdcard/autolog "$PREFIX/bin/autolog" && chmod +x "$PREFIX/bin/autolog" && rm /sdcard/autolog
+autolog status   # 動くことの確認
 ```
+
+配り方は問いません。端末に arm64 の ELF が届いて実行できればそれで足ります。
 
 ### 3. アプリを入れて権限を与える
 
-`src/android/app/build/outputs/apk/debug/app-debug.apk` を入れ、画面から順に許可します。
+```powershell
+npm run build_android_apk
+npm run install_apk        # adb install。手で入れるなら release/android_apk/gkill_autolog.apk
+```
+
+画面から順に許可します。
 
 | 権限 | 何に要るか | 無いとどうなるか |
 | --- | --- | --- |
 | **全ファイルアクセス** | 生ログの書き出し | 端末に溜まったまま渡らない |
 | 使用状況へのアクセス | アプリ利用の記録 | アプリ利用が記録されない |
 | 通知へのアクセス | 通知・再生情報 | 通知と再生が取れない |
+| ユーザー補助 | 前面アプリの把握 | Chrome 履歴の照合ができない |
 | 位置情報 | Wi-Fi の SSID、GPX | SSID が空になり、位置情報も取れない |
 | 位置情報を「常に許可」 | 画面が消えている間の GPX | 画面を消すと位置情報が途切れる |
 | バッテリー最適化の対象外 | 常駐 | 収集が止まる |
 
+ユーザー補助は前面に来たアプリの名前だけを見ます。画面の内容は読み取りません。
+
 全ファイルアクセスだけは他に手段がありません。
 生ログの渡し先が Termux の `autolog` と共有する場所で、アプリ専用領域では渡せないためです。
 
-「収集を開始」で常駐が始まります。書き出しは1時間おきで、
+「収集を開始」で常駐が始まります。書き出しは常駐サービスが1時間おき、
+WorkManager が15分おき（Android の最短周期）に行います。
 すぐ渡したいときは「今すぐ書き出し」を押します。
 
 ### スクリーンショット (Android)
@@ -256,12 +279,31 @@ autolog が次に書き出したときに上書きされます。
 
 ### 4. 取り込む
 
+まず手で確かめます。
+
 ```sh
-autolog import --dry-run --until-now   # 確認
-~/.termux/tasker/autolog.sh            # 実行
+autolog import --dry-run --until-now
 ```
 
 その端末の `gkill_server` が動いている必要があります。
+
+普段は次の2行を1つのスクリプトにして、定期実行から呼びます。
+**このスクリプトはリポジトリに入っていません。** 起動の仕組み（Tasker、cron、
+Termux:Boot など）は環境によって違うので、置き場所と呼び方は各自で決めてください。
+
+```sh
+#!/data/data/com.termux/files/usr/bin/sh
+# 取り込みの前に収集アプリへ書き出しをさせる。
+# これが無いと、アプリ内に溜まっている直近の記録が共有ディレクトリに出ない。
+am broadcast --user 0 -f 0x20 -n com.mt3hr.gkill_autolog/.ExportReceiver
+
+# 上限は「いま」ではなく2分前。接続系のマージ窓 (最長1分) を確実に超えるため。
+# オフセットは %z (+0900) ではなく %:z (+09:00)。前者は RFC3339 として解釈できない。
+autolog import --cutoff "$(date -d '2 minutes ago' +%Y-%m-%dT%H:%M:%S%:z)"
+```
+
+`date -d` が使えない環境では `--until-now` でも動きますが、
+切断直後に走ると接続系の区間が割れることがあります。
 
 ### 5. 同期スクリプトへの組み込み
 
@@ -271,7 +313,7 @@ autolog import --dry-run --until-now   # 確認
 # 端末別ユーザーの rep を運ぶ
 auto_device=$(basename "$(gkill_server dvnf get)")
 auto_user="myuser_auto_$auto_device"
-for auto_db in TimeIs URLog Kmemo Tag Text; do
+for auto_db in TimeIs URLog Kmemo Tag; do
   auto_src="$HOME/gkill/datas/$auto_user/$auto_db.db"
   if [ -f "$auto_src" ]; then
     gkill_server dvnf copy -f "$auto_src" "Auto$auto_db.db"
@@ -380,7 +422,7 @@ autolog を新しくしても既にある `url_denylist.txt` / `notification_den
 上限時刻は既定で「直近の午前4時」です。素の `autolog import` を手で実行すると、
 その日に集めた分がまるごと対象外になります。
 
-同期スクリプトから呼ばれる `run_import.ps1 -UntilNow` と `autolog.sh` は、
+`run_import.ps1 -UntilNow` と、§4 の Android 側の取り込みスクリプトは、
 どちらも上限を**2分前**にしているのでこの問題は起きません。
 手で確かめるときは `autolog import --until-now` を使ってください。
 
@@ -395,11 +437,11 @@ Wi-Fi・Bluetooth・充電は短い切断を結合しますが、結合は次の
 除外されたということは既に gkill へ入っています。
 
 端末で取り込んだデータは、その端末の gkill の `myuser_auto_<端末名>` ユーザー配下にあります。
-`myuser` でログインしていると見えません。PCへ出てくるのは `dvnf.sh` を回した後です。
+`myuser` でログインしていると見えません。PCへ出てくるのは同期スクリプトを回した後です。
 
 ### 書き出しを要求できない
 
-`autolog.sh` は取り込みの前に収集アプリへ書き出しをさせます。
+Android 側の取り込みスクリプトは、取り込みの前に収集アプリへ書き出しをさせます（§4）。
 記録はアプリ内のDBに溜まっていて、書き出すまで共有ディレクトリには出てこないためです。
 
 ```
@@ -423,6 +465,16 @@ Broadcast completed: result=12, data="12 件を書き出した"
 `TERMUX_APP__AM_SOCKET_SERVER_ENABLED` も export されないので、`termux.properties` で有効にすることもできません。
 Android 17 の端末で確認しています。この場合は `/system/bin/am` を使ってください。
 `--user 0` さえ付ければ順序付きブロードキャストも結果待ちも問題なく動きます。
+
+### Wi-Fi の TimeIs が出ない (Windows)
+
+SSID の取得には**位置情報の許可**が要ります。無いと `ERROR_ACCESS_DENIED` になり、
+SSID が空のまま扱われるので接続区間そのものが作られません。
+「設定」→「プライバシーとセキュリティ」→「位置情報」で、
+位置情報サービスと「デスクトップ アプリに位置情報へのアクセスを許可する」を
+オンにしてください。
+
+`autolog collect` のログに一度だけ警告が出ます。許可した後は再起動が要ります。
 
 ### `Client sent an HTTP request to an HTTPS server.`
 

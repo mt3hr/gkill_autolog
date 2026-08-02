@@ -45,6 +45,12 @@ func (e *Emitter) Emit(eventType rawlog.EventType, startTime time.Time, endTime 
 		e.logger.Error("イベントを作れなかった", "event_type", eventType, "error", err)
 		return
 	}
+	// 不正なイベントをキューへ流さない。PutBatch はバッチ内に1件でも不正が
+	// あると全体を失敗させるので、ここで弾かないと他のイベントまで巻き込む。
+	if err := event.Validate(); err != nil {
+		e.logger.Error("イベントが不正なため捨てた", "event_type", eventType, "error", err)
+		return
+	}
 	select {
 	case e.events <- event:
 	default:
@@ -91,15 +97,28 @@ func (e *Emitter) Run(ctx context.Context) error {
 	}
 }
 
+// flushRetryLimit は書き込みに失敗した pending を持ち続ける上限。
+// これを超えても書けなければ諦めて捨てる。収集を待たせないことを優先する。
+const flushRetryLimit = 512
+
 // flush は溜まったイベントを書き出し、空にしたスライスを返す。
-// 書き込みに失敗しても収集は続ける（生ログは次回以降も追記されるため）。
+// 書き込みに失敗しても収集は続ける。
+//
+// 失敗は一時的なもの（import 側のトランザクションによるロック待ちなど）が
+// ほとんどなので、pending を持ち越して次の flush でやり直す。
+// 不正なイベントによる恒久的な失敗は Emit の検査で先に弾いてある。
 func (e *Emitter) flush(ctx context.Context, pending []*rawlog.Event) []*rawlog.Event {
 	if len(pending) == 0 {
 		return pending
 	}
 	inserted, err := e.store.PutBatch(ctx, pending)
 	if err != nil {
-		e.logger.Error("生ログの書き込みに失敗した", "count", len(pending), "error", err)
+		if len(pending) <= flushRetryLimit {
+			e.logger.Error("生ログの書き込みに失敗した。次の書き出しでやり直す",
+				"count", len(pending), "error", err)
+			return pending
+		}
+		e.logger.Error("生ログの書き込みに失敗し続けたため捨てた", "count", len(pending), "error", err)
 		return pending[:0]
 	}
 	if inserted != len(pending) {

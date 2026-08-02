@@ -19,12 +19,20 @@ func NextTick(now time.Time, interval time.Duration) time.Time {
 	return now.Truncate(interval).Add(interval)
 }
 
-// RoundToTick は最寄りの撮影時刻へ丸める。
+// CaptureTime は記録する撮影時刻を決める。
 //
-// タイマーは狙った時刻より少し前に起きることがある。
-// 1時間間隔なら 59 分台に起きることがあり、そのまま切り捨てると
-// ひとつ前の撮影時刻になってしまう。半分ずらしてから切り捨てて、
-// 近いほうの境目に寄せる。
-func RoundToTick(now time.Time, interval time.Duration) time.Time {
-	return now.Add(interval / 2).Truncate(interval)
+// タイマーは狙った時刻 (tick) の少し前後に起きるので、通常は tick を使う。
+// ファイル名が区切りに揃い、起床の数秒のずれが記録に混ざらない。
+//
+// スリープ復帰などで大きく遅れて起きた場合は、実際に撮れた時刻 now を使う。
+// tick や最寄りの区切りへ丸めると、撮っていない時刻（過去の区切りや、
+// 最寄りが先なら未来）の画像として記録することになり、
+// その時刻の本来の撮影も「同名ファイルあり」で失敗する。
+// ずれの許容は間隔の半分、長くても1分。
+func CaptureTime(tick, now time.Time, interval time.Duration) time.Time {
+	tolerance := min(interval/2, time.Minute)
+	if d := now.Sub(tick); d < -tolerance || d > tolerance {
+		return now
+	}
+	return tick
 }

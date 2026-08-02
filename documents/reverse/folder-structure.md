@@ -47,7 +47,7 @@ autolog/
 │   ├── ingest/           Chrome 拡張からの受け口 (HTTP)
 │   ├── inbox/            Android の収集アプリが置いた JSONL の取り込み
 │   ├── normalize/        生ログ → 提案。ルール処理の中核
-│   ├── gkillclient/      gkill の HTTP API クライアント
+│   ├── gkillclient/      gkill の HTTP API クライアント。書き込みの制御もここ
 │   ├── ledger/           書き込み済み台帳
 │   └── config/           設定とディレクトリの解決
 └── schema/
@@ -100,8 +100,18 @@ android/app/src/main/java/com/mt3hr/gkill_autolog/
 
 Manifest V3。閲覧したページと、動画・音楽の実再生時間を送ります。
 
+```
+chrome_ext/
+├── manifest.json    権限と読み込むファイル
+├── background.js    Service Worker。閲覧区間の管理と送信
+├── content_media.js 各ページで再生を数える
+├── options.html     送信先と共有トークンの設定画面
+└── options.js
+```
+
 Service Worker は随時停止するので、イベントはいったん `chrome.storage` へ積み、
 `chrome.alarms` でまとめて送ります。送れた分だけ消します。
+積める上限は5000件で、あふれたら古いものから捨てます。
 
 ## src/scripts — PowerShell スクリプト
 
@@ -112,8 +122,10 @@ Service Worker は随時停止するので、イベントはいったん `chrome
 | `set_auto_password.ps1` | 端末別ユーザー共通のパスワードを設定する |
 | `set_password.ps1` | 単一ユーザー構成のパスワードを設定する |
 | `check_connection.ps1` | gkill へ繋がるか確かめる（書き込まない） |
+| `run_collect.ps1` | autolog.env を読み込んで常駐収集を起動する。タスクスケジューラから呼ぶ |
 | `run_import.ps1` | 取り込みを実行する。同期スクリプトから呼ぶ |
 | `register_tasks.ps1` | タスクスケジューラへ登録する |
+| `collect_android_diag.sh` | Android で撮影・取り込みが動かないときの情報を集める |
 | `autolog.env.example` | 設定ファイルの雛形 |
 
 スクリプトは UTF-8 (BOM 付き) で保存します。設定ファイルも同じです。
@@ -131,7 +143,6 @@ BOM が無いと Windows PowerShell 5.1 が Shift_JIS として読み、
 | `build_go.mjs` | 指定したプラットフォーム向けに autolog をビルドする |
 | `build_apk.mjs` | 収集アプリの APK を作る。バージョンは package.json から決まる |
 | `verify_release_artifacts.mjs` | 成果物が狙ったプラットフォーム向けか、中身を見て確かめる |
-| `deploy_android.mjs` | arm64 バイナリを Dropbox へ配る |
 
 ### 成果物の中身を必ず確かめる
 
@@ -163,16 +174,22 @@ release/
 ├── windows_amd64/autolog.exe
 ├── linux_amd64/autolog, linux_arm64/autolog, linux_arm/autolog
 ├── android_arm64/autolog     Termux で使う
-├── android_arm/autolog
 └── android_apk/gkill_autolog.apk
 ```
+
+この6つが `verify_release_artifacts.mjs` の検査対象です。
 
 Android では共有ストレージも使います。
 
 ```
 /sdcard/gkill_autolog/
 ├── config.env                設定（収集アプリと autolog の両方が読む）
+├── crash.log                 収集アプリが落ちたときの記録。設定画面にも末尾が出る
 ├── events/                   収集アプリが置く JSONL。autolog が読んで消す
 ├── gpslog/                   日別の GPX。dvnf が GPSLogs へ運ぶ
 └── screenshots/              撮影した画像の置き場
 ```
+
+生ログと位置情報の本体は共有ストレージに置きません。
+アプリ専用領域の `autolog_raw.db` と `autolog_gps.db` にあります。
+共有ストレージは FUSE で、複数プロセスから SQLite を開くとロックが効かないためです。

@@ -22,6 +22,10 @@ const STALE_MS = TICK_MS * 3;
 // storage を食い潰さないように、古いものから捨てる。
 const QUEUE_LIMIT = 5000;
 
+// FLUSH_CHUNK は1回の送信に載せる件数の上限。
+// キューが上限まで育っても、受け口の本文上限 (8MB) に収まるように分けて送る。
+const FLUSH_CHUNK = 200;
+
 const KEY_VIEW = "currentView";
 const KEY_QUEUE = "queue";
 const KEY_SETTINGS = "settings";
@@ -50,45 +54,95 @@ async function enqueue(event) {
   await chrome.storage.local.set({ [KEY_QUEUE]: queue });
 }
 
-// flush はキューをまとめて送る。
+// flushing は flush の多重実行を防ぐ。キューが長いと1回の flush が
+// 次の心拍をまたぐことがある。Service Worker が止まれば flush も一緒に
+// 止まるので、メモリ上のフラグで足りる。
+let flushing = false;
+
+// flush はキューを先頭から分けて送る。
 // 送信できたものだけをキューから外すので、収集側が落ちていても失われない。
+//
+// 受け口はバッチに1件でも不正なイベントがあると全体を 400 で拒む。
+// そのまま同じバッチを再送し続けると、以後のイベントがすべて詰まる。
+// 4xx のときは件数を半分に絞って原因のイベントを追い込み、1件まで絞れたら
+// それを捨てて前へ進む。5xx とネットワークエラーは次の心拍で再試行する。
 async function flush() {
-  const { endpoint, token } = await loadSettings();
-  if (!token) {
+  if (flushing) {
     return;
   }
+  flushing = true;
+  try {
+    const { endpoint, token } = await loadSettings();
+    if (!token) {
+      return;
+    }
 
+    let sendCount = FLUSH_CHUNK;
+    for (;;) {
+      const stored = await chrome.storage.local.get(KEY_QUEUE);
+      const queue = stored[KEY_QUEUE] || [];
+      if (queue.length === 0) {
+        return;
+      }
+      const batch = queue.slice(0, Math.min(sendCount, queue.length));
+
+      let response;
+      try {
+        response = await fetch(endpoint, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ events: batch }),
+        });
+      } catch (error) {
+        // 収集プログラムが動いていないだけ。次の心拍で再試行する。
+        console.debug("gkill autolog: 送信できなかった", error);
+        return;
+      }
+
+      if (response.ok) {
+        await removeFromQueue(batch);
+        sendCount = FLUSH_CHUNK;
+        continue;
+      }
+      if (response.status === 401 || response.status === 403) {
+        // トークンの設定違い。イベントに罪はないので捨てずに待つ。
+        console.warn("gkill autolog: 認証に失敗した。オプションのトークンを確認", response.status);
+        return;
+      }
+      if (response.status >= 400 && response.status < 500) {
+        if (batch.length === 1) {
+          console.warn("gkill autolog: 受け付けられないイベントを捨てた",
+            response.status, await response.text(), batch[0]);
+          await removeFromQueue(batch);
+          sendCount = FLUSH_CHUNK;
+          continue;
+        }
+        // どのイベントが原因か分からない。半分に絞って送り直す。
+        sendCount = Math.ceil(batch.length / 2);
+        continue;
+      }
+      console.warn("gkill autolog: 送信に失敗した", response.status, await response.text());
+      return;
+    }
+  } finally {
+    flushing = false;
+  }
+}
+
+// removeFromQueue は送り終えた（または捨てた）イベントをキューから外す。
+//
+// 件数ではなく event_id で外す。送信中に enqueue の上限切り捨てが走ると
+// 先頭の位置がずれ、件数で外すと未送信のイベントを巻き込んでしまう。
+async function removeFromQueue(sent) {
+  const sentIds = new Set(sent.map((event) => event.event_id));
   const stored = await chrome.storage.local.get(KEY_QUEUE);
   const queue = stored[KEY_QUEUE] || [];
-  if (queue.length === 0) {
-    return;
-  }
-
-  let response;
-  try {
-    response = await fetch(endpoint, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify({ events: queue }),
-    });
-  } catch (error) {
-    // 収集プログラムが動いていないだけ。次の心拍で再試行する。
-    console.debug("gkill autolog: 送信できなかった", error);
-    return;
-  }
-
-  if (!response.ok) {
-    console.warn("gkill autolog: 送信に失敗した", response.status, await response.text());
-    return;
-  }
-
-  // 送信中に積まれた分を消さないよう、送った件数だけを先頭から外す。
-  const after = await chrome.storage.local.get(KEY_QUEUE);
-  const current = after[KEY_QUEUE] || [];
-  await chrome.storage.local.set({ [KEY_QUEUE]: current.slice(queue.length) });
+  await chrome.storage.local.set({
+    [KEY_QUEUE]: queue.filter((event) => !sentIds.has(event.event_id)),
+  });
 }
 
 // ---------------------------------------------------------------- 閲覧区間
@@ -113,7 +167,7 @@ async function openView(tab, now) {
 // closeView は開いている閲覧区間を閉じ、browser_view イベントとして積む。
 //
 // 表示していた URL とタイトルはそのまま使う。要約も整形もしない。
-// 30 秒未満の除外や不要ページの判定は normalize と Claude が行うため、ここでは絞らない。
+// 30 秒未満の除外や不要ページの判定は取り込み時の normalize が行うため、ここでは絞らない。
 async function closeView(now) {
   const stored = await chrome.storage.local.get(KEY_VIEW);
   const view = stored[KEY_VIEW];
@@ -130,7 +184,10 @@ async function closeView(now) {
 
   await enqueue({
     schema_version: 1,
-    event_id: crypto.randomUUID(),
+    // 同じ閲覧区間からは同じ id を作る。syncView は複数のイベント
+    // (タブ切替・URL遷移・心拍) から並行に呼ばれることがあり、
+    // 同じ区間を2回積んでも受け口の (device, event_id) で1件に畳まれる。
+    event_id: `browser_view:${view.tabId}:${view.startedAt}`,
     event_type: "browser_view",
     start_time: new Date(view.startedAt).toISOString(),
     end_time: new Date(endedAt).toISOString(),
@@ -201,6 +258,14 @@ chrome.runtime.onInstalled.addListener(() => {
 chrome.runtime.onStartup.addListener(() => {
   chrome.alarms.create(ALARM_NAME, { periodInMinutes: TICK_MINUTES });
   syncView();
+});
+
+// Service Worker が起きるたびの保険。アラームが何かの拍子に消えていると
+// 心拍が止まり、閲覧の終了もキューの送信も行われなくなる。
+chrome.alarms.get(ALARM_NAME).then((alarm) => {
+  if (!alarm) {
+    chrome.alarms.create(ALARM_NAME, { periodInMinutes: TICK_MINUTES });
+  }
 });
 
 chrome.alarms.onAlarm.addListener(async (alarm) => {
@@ -304,9 +369,17 @@ async function finalizePlays(now) {
     if (play.playedSeconds <= 0) {
       continue;
     }
+    if (!(play.endedAt > play.startedAt)) {
+      // 時計の巻き戻り等。終了が開始より前のイベントは受け口が拒むため作らない。
+      continue;
+    }
     await enqueue({
       schema_version: 1,
-      event_id: crypto.randomUUID(),
+      // 同じ再生の確定からは同じ id を作る。finalizePlays は心拍と報告受信の
+      // 両方から並行に呼ばれることがあり、同じ確定を2回積んでも受け口の
+      // (device, event_id) で1件に畳まれる。一時停止後に同じ再生が
+      // 続きから確定し直された場合は endedAt が進むので別 id になる。
+      event_id: `media_play:${playId}:${play.startedAt}:${Math.round(play.endedAt / 1000)}`,
       event_type: "media_play",
       start_time: new Date(play.startedAt).toISOString(),
       end_time: new Date(play.endedAt).toISOString(),

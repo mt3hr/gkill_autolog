@@ -783,6 +783,112 @@ func TestChargeMergingAndTitle(t *testing.T) {
 	}
 }
 
+func TestConnectionClosesAtObservationEnd(t *testing.T) {
+	// スリープ・シャットダウン・収集停止から先は接続を観測できない。
+	// 開いたままの接続区間はその時点で閉じ、持ち越さない。
+	// 閉じないと、電源が入っていない時間まで「接続中」に含まれてしまう。
+	for _, action := range []rawlog.SessionAction{
+		rawlog.SessionSuspend, rawlog.SessionShutdown, rawlog.SessionCollectorStop,
+	} {
+		t.Run(string(action), func(t *testing.T) {
+			result := runNormalize(t, []*rawlog.Event{
+				wifiEvent(t, "w1", 0, "TestWifi", true),
+				event(t, "s1", rawlog.EventSession, 30*min, nil, rawlog.SessionPayload{Action: action}),
+			}, 120*min)
+
+			wifi := proposalsBySource(result, SourceWifi)
+			if len(wifi) != 1 {
+				t.Fatalf("件数 = %d, want 1 (%+v)", len(wifi), describeProposals(wifi))
+			}
+			if end := wifi[0].EndTime.Sub(base()); end != 30*min {
+				t.Errorf("終了 = %v, want %v (観測の切れ目で閉じる)", end, 30*min)
+			}
+			for _, open := range result.OpenStates {
+				if open.Source == SourceWifi {
+					t.Error("閉じた区間が持ち越されている")
+				}
+			}
+		})
+	}
+}
+
+func TestConnectionSurvivesLockAndScreenOff(t *testing.T) {
+	// ロックや画面消灯では接続区間を閉じない。画面が消えていても
+	// 接続は続いているし、観測も続いている。
+	result := runNormalize(t, []*rawlog.Event{
+		wifiEvent(t, "w1", 0, "TestWifi", true),
+		event(t, "s1", rawlog.EventSession, 10*min, nil, rawlog.SessionPayload{Action: rawlog.SessionLock}),
+		event(t, "s2", rawlog.EventSession, 20*min, nil, rawlog.SessionPayload{Action: rawlog.SessionScreenOff}),
+		wifiEvent(t, "w2", 60*min, "TestWifi", false),
+	}, 120*min)
+
+	wifi := proposalsBySource(result, SourceWifi)
+	if len(wifi) != 1 {
+		t.Fatalf("件数 = %d, want 1 (%+v)", len(wifi), describeProposals(wifi))
+	}
+	if end := wifi[0].EndTime.Sub(base()); end != 60*min {
+		t.Errorf("終了 = %v, want %v (ロックでは閉じない)", end, 60*min)
+	}
+}
+
+func TestConnectionRestartsAfterResume(t *testing.T) {
+	// 復帰後は収集側がつながっているものを記録し直し、新しい区間が始まる。
+	// 眠っていた時間は接続として記録しない。
+	result := runNormalize(t, []*rawlog.Event{
+		wifiEvent(t, "w1", 0, "TestWifi", true),
+		event(t, "s1", rawlog.EventSession, 30*min, nil, rawlog.SessionPayload{Action: rawlog.SessionSuspend}),
+		// 復帰後の記録し直し。
+		wifiEvent(t, "w2", 100*min, "TestWifi", true),
+		wifiEvent(t, "w3", 110*min, "TestWifi", false),
+	}, 180*min)
+
+	wifi := proposalsBySource(result, SourceWifi)
+	if len(wifi) != 2 {
+		t.Fatalf("件数 = %d, want 2 (%+v)", len(wifi), describeProposals(wifi))
+	}
+	if end := wifi[0].EndTime.Sub(base()); end != 30*min {
+		t.Errorf("1本目の終了 = %v, want %v", end, 30*min)
+	}
+	if start := wifi[1].StartTime.Sub(base()); start != 100*min {
+		t.Errorf("2本目の開始 = %v, want %v", start, 100*min)
+	}
+}
+
+func TestCarriedConnectionClosesAtObservationEnd(t *testing.T) {
+	// 前回から持ち越した開区間も、今回そのキーのイベントが無ければ
+	// 観測の切れ目で閉じられること。
+	carried := []rawlog.OpenStateInterval{{
+		Device:   rawlog.Device("Phone"),
+		Source:   SourceBluetooth,
+		Key:      "Headphones",
+		Title:    "Bluetooth Headphones",
+		Start:    base(),
+		EventIDs: []string{"b1"},
+	}}
+
+	result := runNormalizeWith(t, []*rawlog.Event{
+		androidEvent(t, "s1", rawlog.EventSession, 30*min, nil,
+			rawlog.SessionPayload{Action: rawlog.SessionCollectorStop}),
+	}, Options{
+		Cutoff:     base().Add(120 * min),
+		OpenStates: carried,
+	})
+
+	states := proposalsBySource(result, SourceBluetooth)
+	if len(states) != 1 {
+		t.Fatalf("件数 = %d, want 1 (%+v)", len(states), describeProposals(states))
+	}
+	if start := states[0].StartTime.Sub(base()); start != 0 {
+		t.Errorf("開始 = %v, want 0 (持ち越した開始時刻)", start)
+	}
+	if end := states[0].EndTime.Sub(base()); end != 30*min {
+		t.Errorf("終了 = %v, want %v", end, 30*min)
+	}
+	if len(result.OpenStates) != 0 {
+		t.Errorf("持ち越し = %d 件, want 0", len(result.OpenStates))
+	}
+}
+
 func TestConnectionStillOpenIsDeferred(t *testing.T) {
 	// 切断を観測していない接続は継続中。提案にはせず次回へ持ち越す。
 	//

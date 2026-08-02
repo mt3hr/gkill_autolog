@@ -28,7 +28,7 @@ func TestRecordAndIsWritten(t *testing.T) {
 		t.Error("記録前に書き込み済みと判定された")
 	}
 
-	if err := l.Record(ctx, "p1", "timeis", "kyou-1"); err != nil {
+	if err := l.Record(ctx, "p1", "timeis", "autolog_window", "Laptop", "kyou-1", []string{"e1", "e2"}); err != nil {
 		t.Fatalf("Record: %v", err)
 	}
 
@@ -47,7 +47,7 @@ func TestRecordIsIdempotent(t *testing.T) {
 	ctx := context.Background()
 
 	for range 3 {
-		if err := l.Record(ctx, "p1", "timeis", "kyou-1"); err != nil {
+		if err := l.Record(ctx, "p1", "timeis", "autolog_window", "Laptop", "kyou-1", []string{"e1"}); err != nil {
 			t.Fatalf("Record: %v", err)
 		}
 	}
@@ -66,7 +66,7 @@ func TestLoadWritten(t *testing.T) {
 	ctx := context.Background()
 
 	for _, id := range []string{"p1", "p2", "p3"} {
-		if err := l.Record(ctx, id, "urlog", "kyou-"+id); err != nil {
+		if err := l.Record(ctx, id, "urlog", "autolog_browser", "Laptop", "kyou-"+id, []string{"ev-" + id}); err != nil {
 			t.Fatalf("Record(%s): %v", id, err)
 		}
 	}
@@ -88,6 +88,56 @@ func TestLoadWritten(t *testing.T) {
 	}
 }
 
+func TestIsCovered(t *testing.T) {
+	// カーソルの引き戻しで確定済み区間を途中から読み直すと、
+	// イベントの部分集合から別 id の提案が再構成される。
+	// 元イベントがすべて記録済みなら断片とみなして弾けること。
+	l := openTestLedger(t)
+	ctx := context.Background()
+
+	if err := l.Record(ctx, "p1", "timeis", "autolog_window", "Phone", "kyou-1", []string{"a1", "a2"}); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+
+	tests := []struct {
+		name     string
+		kind     string
+		source   string
+		device   string
+		eventIDs []string
+		want     bool
+	}{
+		{name: "部分集合は断片", kind: "timeis", source: "autolog_window", device: "Phone",
+			eventIDs: []string{"a2"}, want: true},
+		{name: "全集合も断片", kind: "timeis", source: "autolog_window", device: "Phone",
+			eventIDs: []string{"a1", "a2"}, want: true},
+		{name: "重複したIDは1つとして数える", kind: "timeis", source: "autolog_window", device: "Phone",
+			eventIDs: []string{"a2", "a2"}, want: true},
+		{name: "新しい観測が混ざれば通す", kind: "timeis", source: "autolog_window", device: "Phone",
+			eventIDs: []string{"a2", "a3"}, want: false},
+		{name: "種類が違えば別物", kind: "urlog", source: "autolog_window", device: "Phone",
+			eventIDs: []string{"a1"}, want: false},
+		{name: "収集元が違えば別物", kind: "timeis", source: "autolog_media", device: "Phone",
+			eventIDs: []string{"a1"}, want: false},
+		{name: "端末が違えば別物", kind: "timeis", source: "autolog_window", device: "Tablet",
+			eventIDs: []string{"a1"}, want: false},
+		{name: "空のイベント集合は断片扱いしない", kind: "timeis", source: "autolog_window", device: "Phone",
+			eventIDs: nil, want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			covered, err := l.IsCovered(ctx, tt.kind, tt.source, tt.device, tt.eventIDs)
+			if err != nil {
+				t.Fatalf("IsCovered: %v", err)
+			}
+			if covered != tt.want {
+				t.Errorf("IsCovered = %v, want %v", covered, tt.want)
+			}
+		})
+	}
+}
+
 func TestLedgerPersistsAcrossReopen(t *testing.T) {
 	// 台帳はバッチをまたいで効かなければ意味がない。
 	dir := t.TempDir()
@@ -98,7 +148,7 @@ func TestLedgerPersistsAcrossReopen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	if err := first.Record(ctx, "p1", "kmemo", "kyou-1"); err != nil {
+	if err := first.Record(ctx, "p1", "kmemo", "autolog_notification", "Phone", "kyou-1", []string{"n1"}); err != nil {
 		t.Fatalf("Record: %v", err)
 	}
 	if err := first.Close(); err != nil {

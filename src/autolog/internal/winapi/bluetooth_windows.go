@@ -39,9 +39,7 @@ const (
 	// DEVPROP_BOOLEAN の TRUE は -1。
 	devpropTrue = -1
 
-	errorNoMoreItems     = 259
-	errorInsufficientBuf = 122
-	errorNotFound        = 1168
+	errorNoMoreItems = 259
 )
 
 // guidDevClassBluetooth は GUID_DEVCLASS_BLUETOOTH {e0cbf06c-cd8b-4647-bb8a-263b43f0f974}。

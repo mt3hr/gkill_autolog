@@ -5,6 +5,13 @@
 // そこで「どの提案をどの Kyou として書いたか」をローカルに持ち、
 // バッチが途中で失敗して再実行されても二重登録にならないようにする。
 //
+// 提案 id だけでは足りない。カーソルの引き戻し（継続中セッションや書き込み失敗）で
+// 確定済み区間のイベント列を途中から読み直すと、部分集合のイベントから
+// **別の id** を持つ提案が再構成されるため、id の突合だけでは素通りしてしまう。
+// そこで書き込んだ提案の元イベントも (kind, source, device, event_id) で記録し、
+// 「元イベントがすべて記録済み」の提案は既に書いた区間の断片とみなして弾く。
+// 新しい観測が1つでも混ざっていれば通るので、正当な更新は妨げない。
+//
 // 要件 §18 は「二重登録防止」を初期スコープ外としているが、
 // §17 の「失敗分を次回再処理可能にする」を満たすには最低限これが要る。
 // gkill 側へ問い合わせての重複検査は行わない。
@@ -17,6 +24,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -35,6 +43,15 @@ CREATE TABLE IF NOT EXISTS written (
   written_at  TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_written_at ON written(written_at);
+
+CREATE TABLE IF NOT EXISTS written_event (
+  kind        TEXT NOT NULL,
+  source      TEXT NOT NULL,
+  device      TEXT NOT NULL,
+  event_id    TEXT NOT NULL,
+  proposal_id TEXT NOT NULL,
+  PRIMARY KEY (kind, source, device, event_id)
+);
 `
 
 // Open は台帳を開き、必要ならスキーマを作成する。
@@ -97,15 +114,84 @@ func (l *Ledger) LoadWritten(ctx context.Context) (map[string]struct{}, error) {
 
 // Record は書き込み済みとして記録する。
 // 既に記録があれば何もしない。
-func (l *Ledger) Record(ctx context.Context, proposalID, kind, kyouID string) error {
-	_, err := l.db.ExecContext(ctx,
+//
+// eventIDs は提案の元になった生ログのイベントID。
+// カーソルの引き戻しで同じイベントの部分集合から別 id の提案が再構成されたとき、
+// IsCovered がこれを使って弾く。提案本体と同じトランザクションで記録し、
+// 「提案は載っているのに元イベントが載っていない」中途半端な状態を残さない。
+func (l *Ledger) Record(ctx context.Context, proposalID, kind, source, device, kyouID string, eventIDs []string) error {
+	tx, err := l.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to begin tx to record %s: %w", proposalID, err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	_, err = tx.ExecContext(ctx,
 		`INSERT INTO written (proposal_id, kind, kyou_id, written_at) VALUES (?, ?, ?, ?)
 		 ON CONFLICT(proposal_id) DO NOTHING`,
 		proposalID, kind, kyouID, time.Now().Format(time.RFC3339))
 	if err != nil {
 		return fmt.Errorf("failed to record %s in ledger: %w", proposalID, err)
 	}
+	for _, eventID := range eventIDs {
+		_, err = tx.ExecContext(ctx,
+			`INSERT INTO written_event (kind, source, device, event_id, proposal_id) VALUES (?, ?, ?, ?, ?)
+			 ON CONFLICT(kind, source, device, event_id) DO NOTHING`,
+			kind, source, device, eventID, proposalID)
+		if err != nil {
+			return fmt.Errorf("failed to record event %s of %s in ledger: %w", eventID, proposalID, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit record of %s: %w", proposalID, err)
+	}
 	return nil
+}
+
+// IsCovered は提案の元イベントがすべて記録済みかを返す。
+//
+// true なら、この提案は既に書き込んだ区間をカーソルの引き戻しで
+// 読み直しただけの断片であり、書き込むと二重登録になる。
+// 台帳を導入する前に書き込んだ分には元イベントの記録が無いので、
+// その範囲の断片は検出できない（一度書かれてしまうと以後は検出できる）。
+func (l *Ledger) IsCovered(ctx context.Context, kind, source, device string, eventIDs []string) (bool, error) {
+	unique := make([]string, 0, len(eventIDs))
+	seen := map[string]struct{}{}
+	for _, id := range eventIDs {
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		unique = append(unique, id)
+	}
+	if len(unique) == 0 {
+		return false, nil
+	}
+
+	// IN のプレースホルダ数に上限があるので分けて数える。
+	const chunkSize = 500
+	covered := 0
+	for start := 0; start < len(unique); start += chunkSize {
+		chunk := unique[start:min(start+chunkSize, len(unique))]
+
+		placeholders := strings.Repeat(",?", len(chunk))[1:]
+		params := make([]any, 0, len(chunk)+3)
+		params = append(params, kind, source, device)
+		for _, id := range chunk {
+			params = append(params, id)
+		}
+
+		row := l.db.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM written_event
+			 WHERE kind = ? AND source = ? AND device = ? AND event_id IN (`+placeholders+`)`,
+			params...)
+		var count int
+		if err := row.Scan(&count); err != nil {
+			return false, fmt.Errorf("failed to check event coverage: %w", err)
+		}
+		covered += count
+	}
+	return covered == len(unique), nil
 }
 
 // Count は記録件数を返す。

@@ -27,6 +27,7 @@ $autolog = @(
     (Join-Path $repoRoot 'release/windows_amd64/autolog.exe')
     (Join-Path $repoRoot 'autolog.exe')
 ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+$runCollect = Join-Path $PSScriptRoot 'run_collect.ps1'
 $runImport = Join-Path $PSScriptRoot 'run_import.ps1'
 
 $collectTaskName = 'gkill_autolog_collect'
@@ -47,17 +48,27 @@ if ($Unregister) {
 if (-not $autolog -or -not (Test-Path $autolog)) {
     throw 'autolog.exe が見つからない。npm run build を実行してください'
 }
+if (-not (Test-Path $runCollect)) {
+    throw "run_collect.ps1 が見つからない: $runCollect"
+}
 if (-not (Test-Path $runImport)) {
     throw "run_import.ps1 が見つからない: $runImport"
 }
 
 Write-Host "autolog.exe : $autolog"
+Write-Host "run_collect : $runCollect"
 Write-Host "run_import  : $runImport"
 Write-Host ''
 
 # ---------------------------------------------------------------- 常駐収集
 
-$collectAction = New-ScheduledTaskAction -Execute $autolog -Argument 'collect' -WorkingDirectory $repoRoot
+# autolog.exe を素で起動せず、run_collect.ps1 を経由する。
+# 素で起動すると autolog.env を読む機会が無く、端末名や撮影間隔などの
+# 設定が既定値のまま動いてしまう（取り込み側だけ env を読む非対称だった）。
+$collectAction = New-ScheduledTaskAction `
+    -Execute 'powershell.exe' `
+    -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$runCollect`"" `
+    -WorkingDirectory $repoRoot
 $collectTrigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
 $collectSettings = New-ScheduledTaskSettingsSet `
     -AllowStartIfOnBatteries `
@@ -76,8 +87,8 @@ $collectSettings = New-ScheduledTaskSettingsSet `
 # ならず、ロック中と判定されて静かに撮影が飛ばされ続ける。
 # 実際にこれで2日ぶん記録が止まった。
 #
-# 黒いコンソールウィンドウは autolog collect が自分で隠すので、
-# 窓を消したいという理由でこの設定を変えてはいけない。
+# コンソールウィンドウは -WindowStyle Hidden と autolog collect 自身の
+# 非表示化で隠れるので、窓を消したいという理由でこの設定を変えてはいけない。
 #
 # 管理者権限は要らない。画面の取得にも前面ウィンドウの取得にも不要。
 $collectPrincipal = New-ScheduledTaskPrincipal `
@@ -99,7 +110,7 @@ $importSettings = New-ScheduledTaskSettingsSet `
     -ExecutionTimeLimit (New-TimeSpan -Hours 2)
 
 if ($WhatIfOnly) {
-    Write-Host "$collectTaskName : ログオン時に `"$autolog collect`" (対話セッション・非昇格)"
+    Write-Host "$collectTaskName : ログオン時に `"$runCollect`" (対話セッション・非昇格)"
     Write-Host "$importTaskName : 毎日 04:00 に `"$runImport`""
     Write-Host ''
     Write-Host '(-WhatIfOnly のため登録しない)'

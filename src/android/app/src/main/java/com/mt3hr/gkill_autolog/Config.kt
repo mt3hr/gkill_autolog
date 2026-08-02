@@ -16,15 +16,51 @@ class Config(context: Context) {
     private val preferences =
         context.applicationContext.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE)
 
-    /** この端末の名前。gkill の端末名と揃える。 */
+    /**
+     * この端末の名前。gkill の端末名と揃える。
+     *
+     * ファイル名（<端末>-<時刻>.jsonl や <端末>_<時刻>.webp）にそのまま入るので、
+     * 使えない文字はここで落とす。`_` も区切りと衝突するため使えない
+     * （autolog 側の ValidateDeviceName と同じ規則）。
+     * 落とした結果が空になる入力は保存しない。
+     */
     var device: String
-        get() = preferences.getString(KEY_DEVICE, null) ?: defaultDeviceName()
-        set(value) = preferences.edit().putString(KEY_DEVICE, value.trim()).apply()
+        get() = preferences.getString(KEY_DEVICE, null)?.takeIf { it.isNotBlank() }
+            ?: defaultDeviceName()
+        set(value) {
+            val sanitized = sanitizeDeviceName(value)
+            if (sanitized.isEmpty()) {
+                Log.w(TAG, "端末名に使える文字が無いため変更しない: $value")
+                return
+            }
+            preferences.edit().putString(KEY_DEVICE, sanitized).apply()
+        }
+
+    /**
+     * 収集が有効かどうか。
+     *
+     * 「収集を停止」で false になり、通知の収集（NotificationListener は
+     * システムにバインドされたまま残る）も端末の再起動後の自動開始も止まる。
+     * 「収集を開始」で true に戻る。既定は true（従来どおり再起動で再開する）。
+     */
+    var collectionEnabled: Boolean
+        get() = preferences.getBoolean(KEY_COLLECTION_ENABLED, true)
+        set(value) = preferences.edit().putBoolean(KEY_COLLECTION_ENABLED, value).apply()
 
     /** Chrome の履歴を root で読むかどうか。 */
     var readChromeHistory: Boolean
         get() = preferences.getBoolean(KEY_READ_CHROME_HISTORY, false)
         set(value) = preferences.edit().putBoolean(KEY_READ_CHROME_HISTORY, value).apply()
+
+    /**
+     * Chrome の履歴をどこまで読んだか（Chrome の時刻表現）。
+     *
+     * メモリだけに持つと、アプリの更新や強制終了のたびに履歴DBを
+     * 先頭から読み直すことになる。処理カーソルなのでここへ永続化する。
+     */
+    var chromeHistoryLastVisitTime: Long
+        get() = preferences.getLong(KEY_CHROME_HISTORY_LAST_VISIT, 0L)
+        set(value) = preferences.edit().putLong(KEY_CHROME_HISTORY_LAST_VISIT, value).apply()
 
     /**
      * 定期的にスクリーンショットを撮るかどうか。
@@ -142,7 +178,9 @@ class Config(context: Context) {
         private const val TAG = "AutologConfig"
         private const val PREFERENCES_NAME = "gkill_autolog"
         private const val KEY_DEVICE = "device"
+        private const val KEY_COLLECTION_ENABLED = "collection_enabled"
         private const val KEY_READ_CHROME_HISTORY = "read_chrome_history"
+        private const val KEY_CHROME_HISTORY_LAST_VISIT = "chrome_history_last_visit_time"
         private const val KEY_CAPTURE_SCREENSHOTS = "capture_screenshots"
         private const val KEY_RECORD_LOCATION = "record_location"
         private const val KEY_LOCATION_INTERVAL = "location_interval_seconds"
@@ -185,11 +223,20 @@ class Config(context: Context) {
          * 端末名の既定値。
          *
          * gkill の端末名と揃えるのが本来なので config.env で決めるのが望ましい。
-         * 決まっていないうちは機種名を使う。
-         * 空白は <名前>_<端末>_<日付> の区切りと相性が悪いので落とす。
+         * 決まっていないうちは機種名を使う。固定の名前は置かない
+         * （機種名すら取れない環境では空になり、書き出し側が設定を促す）。
          */
-        fun defaultDeviceName(): String =
-            Build.MODEL.filterNot { it.isWhitespace() || it == '_' }
-                .ifEmpty { "UnknownDevice" }
+        fun defaultDeviceName(): String = sanitizeDeviceName(Build.MODEL)
+
+        /**
+         * 端末名として使えない文字を落とす。
+         *
+         * `_` と空白は <名前>_<端末>_<日付> の区切りと衝突する。
+         * パス区切りなどはファイル名に使えず、書き出しが静かに失敗し続ける。
+         */
+        fun sanitizeDeviceName(name: String): String =
+            name.filterNot {
+                it.isWhitespace() || it.isISOControl() || it == '_' || it in "/\\:*?\"<>|"
+            }
     }
 }

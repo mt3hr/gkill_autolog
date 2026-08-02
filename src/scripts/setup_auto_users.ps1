@@ -12,7 +12,9 @@
 [CmdletBinding()]
 param(
     [string]$BaseUrl = 'https://127.0.0.1:9999',
-    [string]$AdminUser = 'admin',
+    # gkill の管理者アカウント名。ユーザーの追加には管理者が要る。
+    # 既定値は置かない（利用者名をコードに書かない）。
+    [Parameter(Mandatory)][string]$AdminUser,
     [Parameter(Mandatory)][string]$UserPrefix,
     [Parameter(Mandatory)][string[]]$Devices,
     # 何をするかだけ表示して、実際には作らない。
@@ -42,7 +44,9 @@ if (-not (Test-GkillReachable $BaseUrl)) {
 }
 Write-Host "  gkill       : 応答あり ($BaseUrl)"
 
-$adminRow = (& sqlite3.exe $accountDb "SELECT IS_ADMIN FROM ACCOUNT WHERE USER_ID='$AdminUser';" | Out-String).Trim()
+# sqlite3 へ渡す値は ' を '' に畳み、名前に引用符が混ざってもクエリを壊さない。
+$adminUserSql = $AdminUser -replace "'", "''"
+$adminRow = (& sqlite3.exe $accountDb "SELECT IS_ADMIN FROM ACCOUNT WHERE USER_ID='$adminUserSql';" | Out-String).Trim()
 if ($adminRow -eq '') { throw "アカウント '$AdminUser' が存在しません。-AdminUser で指定してください" }
 if ($adminRow -ne '1') { throw "アカウント '$AdminUser' は管理者ではありません。ユーザーの追加には管理者が要ります" }
 Write-Host "  管理者      : $AdminUser"
@@ -63,7 +67,8 @@ Write-Host '管理者でログインしました'
 # 作るユーザーを確定してから、2つめのパスワードを聞く。
 $plan = foreach ($device in $Devices) {
     $user = "$UserPrefix$device"
-    $exists = (& sqlite3.exe $accountDb "SELECT 1 FROM ACCOUNT WHERE USER_ID='$user';" | Out-String).Trim() -eq '1'
+    $userSql = $user -replace "'", "''"
+    $exists = (& sqlite3.exe $accountDb "SELECT 1 FROM ACCOUNT WHERE USER_ID='$userSql';" | Out-String).Trim() -eq '1'
     [pscustomobject]@{ User = $user; Device = $device; Exists = $exists }
 }
 
@@ -81,7 +86,7 @@ if ($WhatIfOnly) {
 }
 
 Write-Host ''
-$autoPw = Read-GkillPasswordSha256 '自動ログ用ユーザーに設定するパスワード（3ユーザー共通）'
+$autoPw = Read-GkillPasswordSha256 '自動ログ用ユーザーに設定するパスワード（全端末共通）'
 
 # ---------------------------------------------------------------- 作成
 
@@ -107,7 +112,8 @@ foreach ($item in $plan) {
 
     # 作成時に発行される reset_token でパスワードを設定する。
     # 設定済みのユーザーは token が空になる。
-    $token = (& sqlite3.exe $accountDb "SELECT PASSWORD_RESET_TOKEN FROM ACCOUNT WHERE USER_ID='$user';" | Out-String).Trim()
+    $userSql = $user -replace "'", "''"
+    $token = (& sqlite3.exe $accountDb "SELECT PASSWORD_RESET_TOKEN FROM ACCOUNT WHERE USER_ID='$userSql';" | Out-String).Trim()
     if ($token) {
         $reset = Invoke-GkillApi $BaseUrl '/api/set_new_password' @{
             user_id             = $user
@@ -144,7 +150,7 @@ Write-Host ''
 Write-Host '=== 完了 ==='
 Write-Host ''
 Write-Host 'このあとの手順:'
-Write-Host '  1. autolog を端末別接続へ改修して取り込み直す（Claude 側で対応）'
+Write-Host '  1. autolog.env に GKILL_AUTO_USER_PREFIX と GKILL_AUTO_PASSWORD_SHA256 を入れる'
 Write-Host '  2. 同期スクリプト を流す（Auto*_<端末>_<日付>.db が Kyou に現れる）'
 Write-Host '  3. 閲覧用ユーザーの設定にリポジトリを4本追加する（読み取り専用）'
 foreach ($pair in @(

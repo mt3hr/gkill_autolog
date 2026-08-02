@@ -63,7 +63,13 @@ func newCollectCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			logger.Info("共有トークンの保存先", "chrome", cfg.TokenPath("ingest_token.txt"))
+			if cfg.IngestToken != "" {
+				// 環境変数や config.env で指定されている。ファイルは読まれないので、
+				// 古い ingest_token.txt を案内すると Chrome 拡張の設定を誤らせる。
+				logger.Info("共有トークンは設定 (" + config.EnvIngestToken + ") の値を使う")
+			} else {
+				logger.Info("共有トークンの保存先", "chrome", cfg.TokenPath("ingest_token.txt"))
+			}
 
 			// Ctrl-C とログオフで後片付けをしてから終わる。
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)

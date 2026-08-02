@@ -14,6 +14,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -237,8 +238,8 @@ func (c *Client) call(ctx context.Context, path string, build func(sessionID str
 	}
 
 	err := c.callOnce(ctx, path, build)
-	apiError, ok := err.(*APIError)
-	if !ok || !apiError.isAuthError() {
+	var apiError *APIError
+	if !errors.As(err, &apiError) || !apiError.isAuthError() {
 		return err
 	}
 

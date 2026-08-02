@@ -28,13 +28,19 @@ su -c "cat /data/data/$pkg/shared_prefs/gkill_autolog.xml" 2>&1 ||
 echo
 echo "===== 2. root で screencap が通るか ====="
 # ここが失敗するなら、撮影できないのは root の許可の問題。
-su -c "screencap -p /sdcard/gkill_autolog_diag_shot.png" 2>&1
-if [ -s /sdcard/gkill_autolog_diag_shot.png ]; then
+#
+# su 側のプロセスに /sdcard へ書かせない。su 経由のシェルは補助グループを
+# 持たず /sdcard を開けないことがある (CLAUDE.md の落とし穴。本体アプリも
+# cacheDir へ書かせている)。画像は stdout で受け取り、Termux 側で保存する。
+diag_shot=/sdcard/gkill_autolog_diag_shot.png
+su -c "screencap -p" > "$diag_shot"
+if [ -s "$diag_shot" ]; then
   echo "OK: screencap は通る"
-  ls -l /sdcard/gkill_autolog_diag_shot.png
-  rm -f /sdcard/gkill_autolog_diag_shot.png
+  ls -l "$diag_shot"
+  rm -f "$diag_shot"
 else
   echo "!! screencap が画像を作れなかった"
+  rm -f "$diag_shot"
 fi
 
 echo
@@ -67,7 +73,7 @@ su -c "logcat -d -s AutologScreenshot:V AutologService:V AutologLocation:V Autol
 
 echo
 echo "===== 7. Termux 側の autolog 取り込み ====="
-# TimeIs などが 07-26 から止まっているので、こちらも見る。
+# 撮れていても取り込みが止まっていれば gkill には出ないので、こちらも見る。
 echo "--- autolog のホーム ---"
 ls -l "$HOME/.gkill_autolog" 2>&1 | head -20
 echo "--- 直近の取り込みログ ---"

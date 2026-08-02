@@ -49,6 +49,8 @@ func newScreenshotCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&at, "at", "", "撮影時刻として記録する日時 (2006-01-02T15:04:05)。既定は現在時刻")
+	cmd.Flags().StringVar(&at, "at", "",
+		"撮影時刻として記録する日時 (2006-01-02T15:04:05)。既定は現在時刻。"+
+			"動作確認用。実運用で過去や未来の時刻を指定しない（撮り逃した時間の補完はしない約束）")
 	return cmd
 }

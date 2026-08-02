@@ -32,24 +32,35 @@ func Run(ctx context.Context, store *rawlog.Store, device rawlog.Device, logger 
 		logger.Error("未終了セッションの補完に失敗した", "error", err)
 	}
 
-	group, groupCtx := errgroup.WithContext(ctx)
+	// 終了は2段階にする。コレクタと emitter を同じ ctx で止めると、
+	// emitter が残りを書き出して返った**あと**にコレクタが collector_stop や
+	// 最終入力を Emit することがあり、それらがキューに残ったまま消える。
+	// コレクタが全員終わってから emitter を止めれば取りこぼさない。
+	emitterCtx, stopEmitter := context.WithCancel(context.WithoutCancel(ctx))
+	defer stopEmitter()
+	emitterDone := make(chan error, 1)
+	go func() {
+		emitterDone <- emitter.Run(emitterCtx)
+	}()
 
-	group.Go(func() error {
-		return emitter.Run(groupCtx)
+	collectors, collectorsCtx := errgroup.WithContext(ctx)
+	collectors.Go(func() error {
+		return newWindowCollector(emitter, logger).run(collectorsCtx)
 	})
-	group.Go(func() error {
-		return newWindowCollector(emitter, logger).run(groupCtx)
+	collectors.Go(func() error {
+		return newSessionCollector(emitter, logger).run(collectorsCtx)
 	})
-	group.Go(func() error {
-		return newSessionCollector(emitter, logger).run(groupCtx)
-	})
-	group.Go(func() error {
-		return newNetPowerCollector(emitter, logger).run(groupCtx)
+	collectors.Go(func() error {
+		return newNetPowerCollector(emitter, logger).run(collectorsCtx)
 	})
 
 	logger.Info("収集を開始した", "device", device, "raw_db", store.Path())
 
-	err := group.Wait()
+	err := collectors.Wait()
+	stopEmitter()
+	if emitterErr := <-emitterDone; emitterErr != nil && !errors.Is(emitterErr, context.Canceled) {
+		err = errors.Join(err, emitterErr)
+	}
 	if errors.Is(err, context.Canceled) {
 		return nil
 	}

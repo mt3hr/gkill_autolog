@@ -17,7 +17,6 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"slices"
 	"time"
 
 	"github.com/mt3hr/gkill_autolog/src/autolog/internal/rawlog"
@@ -100,7 +99,9 @@ func serveMux(ctx context.Context, name, addr string, mux *http.ServeMux, path s
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
+	shutdownDone := make(chan struct{})
 	go func() {
+		defer close(shutdownDone)
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
 		defer cancel()
@@ -114,6 +115,9 @@ func serveMux(ctx context.Context, name, addr string, mux *http.ServeMux, path s
 	if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return fmt.Errorf("failed to serve %s: %w", name, err)
 	}
+	// Serve は Shutdown が始まった時点で返る。処理中のリクエストを待ち終える前に
+	// 呼び出し側へ戻ると、store が閉じられて処理中の書き込みが失敗する。
+	<-shutdownDone
 	return nil
 }
 
@@ -125,26 +129,6 @@ type deviceResolver func(e *rawlog.Event) error
 func deviceFixed(device rawlog.Device) deviceResolver {
 	return func(e *rawlog.Event) error {
 		e.Device = device
-		return nil
-	}
-}
-
-// deviceFromRequest は送信側が申告した端末名を使う。
-//
-// この機械自身を名乗ることは許さない（Windows 側の収集と混ざるため）。
-// また、設定で許可した端末名だけを受け付ける。
-// 端末を増やすときは AUTOLOG_ALLOWED_DEVICES に足して収集を再起動する。
-func deviceFromRequest(localDevice rawlog.Device, allowed []rawlog.Device) deviceResolver {
-	return func(e *rawlog.Event) error {
-		if e.Device == "" {
-			return errors.New("device is required")
-		}
-		if e.Device == localDevice {
-			return fmt.Errorf("device %q is collected locally and must not be sent over the network", e.Device)
-		}
-		if !slices.Contains(allowed, e.Device) {
-			return fmt.Errorf("device %q is not allowed (add it to %s)", e.Device, "AUTOLOG_ALLOWED_DEVICES")
-		}
 		return nil
 	}
 }

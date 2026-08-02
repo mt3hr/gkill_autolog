@@ -81,10 +81,6 @@ const (
 	// 止めたいときは --no-screenshot を使う。
 	MinScreenshotInterval = 10 * time.Second
 	MaxScreenshotInterval = 24 * time.Hour
-	// URLogRateLimit は add_urlog の発行間隔。
-	// gkill サーバが add_urlog のたびに対象URLを再取得する (handle_add_urlog.go -> FillURLogField) ため、
-	// 連続投入するとサーバから大量の外向きフェッチが出る。
-	URLogRateLimit = time.Second
 )
 
 // Config は実行時設定。
@@ -113,8 +109,8 @@ type Config struct {
 	// GkillInsecure は TLS 証明書の検証を省くかどうか。
 	// gkill を自己署名証明書の HTTPS で動かしている場合に要る。
 	GkillInsecure bool
-	// AllowedDevices は受け口が受け付ける端末名。
-	// 空ならこの端末の分だけを受け付ける。
+	// AllowedDevices は取り込み（inbox の JSONL）が受け付ける端末名。
+	// 空ならこの端末の分だけを受け付ける。この端末は常に含まれる。
 	AllowedDevices []rawlog.Device
 
 	// UsageTitle は端末利用 TimeIs のタイトル。空なら normalize の既定値。
@@ -188,6 +184,12 @@ func Load() (*Config, error) {
 	}
 
 	device := rawlog.Device(lookupOr(EnvDevice, defaultDeviceName()))
+	if device == "" {
+		// 決め打ちの名前で続行しない。端末名は Kyou の create_device や
+		// ファイル名に刻まれ、間違ったまま集めた分は後から直せない。
+		return nil, fmt.Errorf("%s が設定されておらず、ホスト名からも端末名を決められない。%s を設定してください",
+			EnvDevice, EnvDevice)
+	}
 	if err := rawlog.ValidateDeviceName(device); err != nil {
 		return nil, fmt.Errorf("%s: %w", EnvDevice, err)
 	}
@@ -295,10 +297,12 @@ func resolveAllowedDevices(raw string, localDevice rawlog.Device) ([]rawlog.Devi
 //
 // gkill の端末名と揃えるのが本来なので、AUTOLOG_DEVICE で明示するのが望ましい。
 // 未設定のときはホスト名を使う。端末名に使えない文字は落とす。
+// 決め打ちの名前は置かない。ホスト名を使えなければ空を返し、
+// 呼び出し側が AUTOLOG_DEVICE の設定を求めてエラーにする。
 func defaultDeviceName() string {
 	hostname, err := os.Hostname()
 	if err != nil {
-		return "UnknownDevice"
+		return ""
 	}
 
 	var builder strings.Builder
@@ -308,9 +312,6 @@ func defaultDeviceName() string {
 			continue
 		}
 		builder.WriteRune(r)
-	}
-	if builder.Len() == 0 {
-		return "UnknownDevice"
 	}
 	return builder.String()
 }

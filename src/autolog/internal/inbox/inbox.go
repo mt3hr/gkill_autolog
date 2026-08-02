@@ -108,6 +108,15 @@ func Ingest(ctx context.Context, store *rawlog.Store, opts Options, logger *slog
 		if opts.KeepFiles {
 			continue
 		}
+		if skipped > 0 {
+			// 受け付けなかった行が残っている。ここで消すとその生ログが恒久に
+			// 失われるので、ファイルは残す。原因（端末名の設定やスキーマ）を
+			// 直せば次回の取り込みで残りも入り、そのとき消える。
+			// 取り込み済みの行は (device, event_id) の重複として弾かれる。
+			logger.Warn("受け付けなかった行があるためファイルを残す",
+				"path", path, "skipped", skipped)
+			continue
+		}
 		if err := os.Remove(path); err != nil {
 			// 消せなくても取り込みは済んでいる。次回は重複として弾かれる。
 			logger.Warn("取り込んだファイルを消せなかった", "path", path, "error", err)

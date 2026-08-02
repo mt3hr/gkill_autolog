@@ -6,6 +6,7 @@ import com.mt3hr.gkill_autolog.Config
 import com.mt3hr.gkill_autolog.SharedStorage
 import com.mt3hr.gkill_autolog.store.EventStore
 import java.io.File
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * 溜まった生ログを共有ストレージへ JSONL として書き出す。
@@ -36,6 +37,11 @@ class JsonlExporter(context: Context) {
             Log.w(TAG, "共有ストレージへ書けないため書き出さない。全ファイルアクセスの許可が要る")
             return 0
         }
+        if (config.device.isBlank()) {
+            // 端末名はファイル名と gkill の端末名になる。空のまま書き出すと後で直せない。
+            Log.w(TAG, "端末名が決まっていないため書き出さない。アプリの設定で端末名を入れること")
+            return 0
+        }
 
         var exported = 0
         while (true) {
@@ -64,10 +70,18 @@ class JsonlExporter(context: Context) {
     fun pendingCount(): Int = store.pendingCount()
 
     private fun writeBatch(content: String): Boolean {
+        // 名前が既存ファイルと重なると rename が黙って上書きし、
+        // 書き出し済み（＝端末からは削除済み）の生ログが失われる。
+        // 時計の巻き戻りや同一ミリ秒でも重ならないよう、連番を足したうえで
+        // 既存の名前を避ける。
         val stamp = System.currentTimeMillis()
-        val base = "${config.device}-$stamp"
-        val temporary = File(SharedStorage.eventsDir, "$base.jsonl.tmp")
-        val destination = File(SharedStorage.eventsDir, "$base.jsonl")
+        var temporary: File
+        var destination: File
+        do {
+            val base = "${config.device}-$stamp-${sequence.incrementAndGet()}"
+            temporary = File(SharedStorage.eventsDir, "$base.jsonl.tmp")
+            destination = File(SharedStorage.eventsDir, "$base.jsonl")
+        } while (destination.exists() || temporary.exists())
 
         return try {
             temporary.outputStream().use { out ->
@@ -98,5 +112,8 @@ class JsonlExporter(context: Context) {
          * 呼び出し元ごとに JsonlExporter を作るので、インスタンスではなくここで持つ。
          */
         private val exportLock = Any()
+
+        /** 同じミリ秒に複数バッチを書いても名前が重ならないための連番。 */
+        private val sequence = AtomicLong(0)
     }
 }
