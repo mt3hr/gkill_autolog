@@ -167,7 +167,7 @@ func browserViews(device rawlog.Device, events []*rawlog.Event, denyList *DenyLi
 // 検索URLや推測したURLは作らない（要件 §8.2）。TimeIs にはタイトル・アーティストという
 // 観測できた事実だけを載せ、URL の代わりを埋め合わせることはしない。
 //
-// Claude の判定は通さない（残す条件が要件で決まっているため）。
+// 残す条件は要件で決まっているので、判定を外へ出さない。
 //
 // 2つ目の戻り値は URLog にした URL。browserViews が同じURLの閲覧区間を落とすのに使う。
 // 3つ目の戻り値は次回へ持ち越す末尾の区間。

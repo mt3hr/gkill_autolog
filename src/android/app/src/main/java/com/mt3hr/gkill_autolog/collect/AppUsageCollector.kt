@@ -16,7 +16,7 @@ import org.json.JSONObject
  * それぞれ別の区間として記録される。
  *
  * gkill へ出すのは表示上のアプリ名だけで、パッケージ名は生ログにのみ残す（要件 §11.2）。
- * 30秒未満を落とす判定は X1 Yoga 側の normalize が行う。
+ * 30秒未満を落とす判定は取り込み時の normalize が行う。
  */
 class AppUsageCollector(
     private val context: Context,

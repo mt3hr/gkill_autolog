@@ -62,7 +62,7 @@ com.android.providers.downloads
 # Chrome はダウンロードのチャンネルを2つ持っている。
 # 進行中が downloads で、「ダウンロードが完了しました」は completed_downloads。
 # 残る意味がないのは後者なので、completed_ が付く方を必ず含めること
-# (Pixel 9a / Galaxy Tab S11 の dumpsys notification で確認)。
+# (端末の dumpsys notification で確認)。
 re:(?i)^(completed_)?downloads$
 # 端末によっては「ファイル」からも出る。うるさければ # を外す。
 #com.google.android.documentsui

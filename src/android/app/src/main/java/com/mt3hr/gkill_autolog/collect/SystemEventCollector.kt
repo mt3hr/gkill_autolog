@@ -20,7 +20,7 @@ import org.json.JSONObject
  * 端末利用・Wi-Fi・Bluetooth・充電の状態変化をブロードキャストから記録する。
  *
  * 記録するのは状態が変わった瞬間だけ。区間へのまとめと短時間の再接続の結合は
- * X1 Yoga 側の normalize が行うので、ここでは判断しない。
+ * 取り込み時の normalize が行うので、ここでは判断しない。
  */
 class SystemEventCollector(
     private val context: Context,

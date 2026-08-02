@@ -22,7 +22,6 @@
     "build_x_compile": "npm run build_go_parallel && npm run build_android_apk",
     "release": "npm run clean_release && npm run build_x_compile && npm run verify_release_artifacts",
     "verify_release_artifacts": "node src/tools/verify_release_artifacts.mjs",
-    "deploy_android": "npm run build_android_arm64 && node src/tools/deploy_android.mjs",
     "install_apk": "adb install -r -d release/android_apk/gkill_autolog.apk",
     "test": "npm run test_go && npm run test_android",
     "test_go": "cd src/autolog && go test ./...",

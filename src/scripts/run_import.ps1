@@ -3,7 +3,7 @@
 # 生ログを整理してこの端末の gkill へ直接書き込む（autolog import）。
 # 同期スクリプト から呼ぶほか、手で実行してもよい。
 #
-# Claude は使わない。URLog の絞り込みは $AUTOLOG_HOME\url_denylist.txt で行う。
+# URLog の絞り込みは $AUTOLOG_HOME\url_denylist.txt だけで行う。
 # スクリーンショットの運び出しは 同期スクリプト の dvnf move が行う。ここでは扱わない。
 #
 # 書き込めなかった分は台帳へ記録されないので、次回の取り込みで再処理される（要件 §17）。
@@ -34,7 +34,7 @@ $ErrorActionPreference = 'Stop'
 
 # -UntilNow のときに「いま」から何分手前を上限にするか。
 # 接続系のマージ窓 (最長1分) を確実に超える値にする。詳細は param の説明。
-# termux-tasker/autolog.sh の cutoff も同じ考え方で 2 分にしてある。
+# Android 側の取り込みスクリプトの cutoff も同じ考え方で 2 分にする。
 $CutoffLagMinutes = 2
 
 # param の既定値では解決しない。Windows PowerShell 5.1 は -File で起動されたとき

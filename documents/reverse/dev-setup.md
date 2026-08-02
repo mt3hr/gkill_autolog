@@ -5,9 +5,10 @@
 | 対象 | 必要なもの |
 | --- | --- |
 | Go の CLI | Go 1.26 以上 |
-| Android アプリ | JDK 17、Android SDK (compileSdk 37) |
+| Android アプリ | JDK 17、Android SDK (compileSdk 37。minSdk 26 / targetSdk 36) |
 | Chrome 拡張 | なし（そのまま読み込める） |
 | スクリプト | Windows PowerShell 5.1 または PowerShell 7 |
+| 端末別ユーザーの作成 | PATH に通った `sqlite3` |
 
 CGO は使いません。SQLite は純 Go の実装なので、C コンパイラは要りません。
 
@@ -31,12 +32,12 @@ go build -o ..\..\release\windows_amd64\autolog.exe .\cmd\autolog
 ### Android (arm64) 向け
 
 ```powershell
-npm run build_android_arm64  # ビルドだけ
-npm run deploy_android       # ビルドして配布まで
+npm run build_android_arm64
 ```
 
 `release/android_arm64/autolog` ができます。
 出力が本当に ARM64 の ELF かを `verify_release_artifacts.mjs` が確認します。
+端末への入れ方は [operations-guide.md](operations-guide.md) を参照してください。
 
 **`CGO_ENABLED=0` が必要です。** Windows 上で NDK の clang を指定すると、
 Go がネイティブのコンパイラへ切り替わり、中身が Windows のバイナリ (MZ) のまま

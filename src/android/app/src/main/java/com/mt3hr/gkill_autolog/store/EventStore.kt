@@ -10,8 +10,8 @@ import org.json.JSONObject
 /**
  * 端末内の生ログ。追記専用。
  *
- * 送信できたイベントだけを消すので、X1 Yoga が止まっていても失われない。
- * 送信の成否が確定するまで保持し、確定するまで削除しない（要件 §17）。
+ * 書き出せたイベントだけを消すので、取り込みが止まっていても失われない。
+ * 書き出しの成否が確定するまで保持し、確定するまで削除しない（要件 §17）。
  */
 class EventStore(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME, null, DATABASE_VERSION) {
 
