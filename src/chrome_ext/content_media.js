@@ -231,9 +231,22 @@
     play.artist = artist;
   }
 
+  // newPlayId は再生1回ぶんの識別子を作る。
+  //
+  // crypto.randomUUID は secure context 限定で、平文 http のページ
+  // (宅内サーバなど) では存在しない。ここで毎秒例外を投げると
+  // そのページの再生が一切記録されなくなるため、代わりの乱数で組み立てる。
+  function newPlayId() {
+    if (crypto.randomUUID) {
+      return crypto.randomUUID();
+    }
+    const bytes = crypto.getRandomValues(new Uint8Array(16));
+    return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+  }
+
   function startPlay(key, url, videoId, media) {
     play = {
-      playId: crypto.randomUUID(),
+      playId: newPlayId(),
       key,
       url,
       videoId: videoId || "",

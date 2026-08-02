@@ -142,7 +142,9 @@ async function flush() {
         console.warn("gkill autolog: 認証に失敗した。オプションのトークンを確認", response.status);
         return;
       }
-      if (response.status >= 400 && response.status < 500) {
+      if (response.status === 400) {
+        // 受け口がイベントを拒んだ (不正なイベントが混ざっている)。
+        // イベントが原因と確定できるのは受け口の 400 だけ。
         if (batch.length === 1) {
           console.warn("gkill autolog: 受け付けられないイベントを捨てた",
             response.status, await response.text(), batch[0]);
@@ -153,6 +155,14 @@ async function flush() {
         // どのイベントが原因か分からない。半分に絞って送り直す。
         sendCount = Math.ceil(batch.length / 2);
         continue;
+      }
+      if (response.status < 500) {
+        // 400 以外の 4xx はイベントではなく環境の問題。
+        // 送信先のパスを打ち間違えて別のサーバが 404/405 を返している場合など。
+        // ここで二分破棄に入ると、設定を直す前にキューが空になってしまう。
+        console.warn("gkill autolog: 送信先がイベントを受け付けない。送信先の設定を確認",
+          response.status, await response.text());
+        return;
       }
       console.warn("gkill autolog: 送信に失敗した", response.status, await response.text());
       return;
@@ -209,14 +219,18 @@ async function closeView(now) {
   if (!view) {
     return;
   }
-  await chrome.storage.local.remove(KEY_VIEW);
 
   // Service Worker が止まっていた場合、現在時刻は終了時刻として信用できない。
   const endedAt = now - view.heartbeatAt > STALE_MS ? view.heartbeatAt : now;
   if (endedAt <= view.startedAt) {
+    await chrome.storage.local.remove(KEY_VIEW);
     return;
   }
 
+  // イベントを積んでから区間を消す。逆順だと、消してから積むまでの間に
+  // SW が落ちたとき区間ごと失われる。この順なら、積んだ直後に落ちても
+  // 次の closeView が同じ決定的 event_id を積み直すだけで、
+  // 受け口の (device, event_id) が1件に畳む。
   await enqueue({
     schema_version: 1,
     // 同じ閲覧区間からは同じ id を作る。syncView は複数のイベント
@@ -237,6 +251,7 @@ async function closeView(now) {
       source: "chrome_extension",
     },
   });
+  await chrome.storage.local.remove(KEY_VIEW);
 }
 
 // visibleTab はいま見えているタブを返す。
@@ -271,6 +286,15 @@ async function syncView() {
   }
 
   if (view && view.tabId === tab.id && view.url === tab.url) {
+    // 心拍が長く途絶えていたら、Service Worker ごと止まっていた (スリープなど)。
+    // 同じページが見えていても連続した閲覧ではないので、最後の心拍の時刻で
+    // 区間を閉じてから開き直す。ここで継続扱いにすると、眠っていた時間が
+    // 「閲覧中」として記録され、閉じたときの補修も心拍の上書きで効かなくなる。
+    if (now - view.heartbeatAt > STALE_MS) {
+      await closeView(now);
+      await openView(tab, now);
+      return;
+    }
     // 同じページを見続けている。タイトルは後から確定することがあるので拾い直す。
     await chrome.storage.local.set({
       [KEY_VIEW]: { ...view, title: tab.title || view.title, heartbeatAt: now },

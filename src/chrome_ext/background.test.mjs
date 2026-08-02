@@ -261,3 +261,66 @@ test("アラームの心拍で報告が途切れた再生が確定する", async
   assert.equal(plays.length, 1, "途絶えた再生が確定されていない");
   assert.equal(store.pendingPlays.stale, undefined, "確定した再生が pending に残っている");
 });
+
+test("心拍が長く途絶えたあとの同じタブは、眠っていた時間を閲覧に含めず開き直す", async () => {
+  // スリープ復帰後、ロックなし運用ではフォーカスも同じタブのまま心拍が再開する。
+  // 継続扱いにすると眠っていた数時間が「閲覧中」になる。
+  store = {};
+  const now = Date.now();
+  const lastBeat = now - 3 * 60 * 60 * 1000; // 3時間前に心拍が止まった
+  store.currentView = {
+    url: "https://example.com/doc",
+    title: "資料",
+    tabId: 7,
+    windowId: 1,
+    startedAt: lastBeat - 120_000,
+    heartbeatAt: lastBeat,
+  };
+  visibleTab = { id: 7, windowId: 1, url: "https://example.com/doc", title: "資料" };
+
+  await fireAlarm();
+  visibleTab = null;
+
+  const views = (store.queue || []).filter((event) => event.event_type === "browser_view");
+  assert.equal(views.length, 1, "眠る前の区間が閉じられていない");
+  assert.equal(views[0].end_time, new Date(lastBeat).toISOString(),
+    "終了時刻が最後の心拍になっていない (眠っていた時間が閲覧に含まれた)");
+  assert.ok(store.currentView, "復帰後の新しい区間が開かれていない");
+  assert.ok(store.currentView.startedAt >= now, "新しい区間の開始が復帰後になっていない");
+});
+
+test("400 以外の 4xx (環境起因) ではキューを捨てない", async () => {
+  // 送信先のパス違いなどで別のサーバが 404 を返す場合。
+  // 二分破棄に入ると、設定を直す前にキューが空になってしまう。
+  store = {};
+  store.settings = { endpoint: "http://127.0.0.1:19921/ingest", token: "t" };
+  store.queue = [{ event_id: "x1", event_type: "browser_view" }];
+  globalThis.fetch = async () => ({ ok: false, status: 404, text: async () => "not found" });
+
+  await fireAlarm();
+
+  assert.equal((store.queue || []).length, 1, "環境起因の 4xx でイベントが捨てられた");
+});
+
+test("受け口の 400 は原因の1件だけを捨てて、残りは送って前へ進む", async () => {
+  store = {};
+  store.settings = { endpoint: "http://127.0.0.1:19921/ingest", token: "t" };
+  store.queue = [
+    { event_id: "bad", event_type: "browser_view" },
+    { event_id: "good", event_type: "browser_view" },
+  ];
+  const sentBatches = [];
+  globalThis.fetch = async (_url, init) => {
+    const events = JSON.parse(init.body).events;
+    sentBatches.push(events.map((event) => event.event_id));
+    if (events.some((event) => event.event_id === "bad")) {
+      return { ok: false, status: 400, text: async () => "invalid event" };
+    }
+    return { ok: true, status: 200, text: async () => "" };
+  };
+
+  await fireAlarm();
+
+  assert.equal((store.queue || []).length, 0,
+    `不正な1件の特定と破棄で前へ進めていない (送信履歴: ${JSON.stringify(sentBatches)})`);
+});
