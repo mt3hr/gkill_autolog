@@ -413,6 +413,12 @@ async function recordProgress(message) {
     playedSeconds = message.playedSeconds - tombstone.playedSeconds;
     if (playedSeconds <= 0) {
       // 確定済みの内容の再送。新しい再生は進んでいない。
+      // 墓標の時刻だけ更新する。掃除 (FINALIZED_TTL_MS) を「最後に報告を
+      // 見てから」で数えないと、タブを開いたまま TTL を超えて一時停止した
+      // 再生が再開したとき墓標が消えていて、累計の全量が新しい再生として
+      // 二重計上されてしまう。
+      tombstone.finalizedAt = Date.now();
+      await chrome.storage.local.set({ [KEY_FINALIZED_PLAYS]: finalized });
       return;
     }
     // 続きの区間は、確定した区間の終わりから始まったとみなす。
@@ -451,7 +457,8 @@ async function finalizePlays(now) {
   const pending = stored[KEY_PENDING_PLAYS] || {};
   const finalized = stored[KEY_FINALIZED_PLAYS] || {};
 
-  // 使い終わった墓標を掃除する。差分計算に要るのは確定からしばらくの間だけ。
+  // 使い終わった墓標を掃除する。差分計算に要るのは、その playId の報告を
+  // 最後に見てからしばらくの間だけ (再送のたびに finalizedAt を更新している)。
   for (const [playId, tombstone] of Object.entries(finalized)) {
     if (now - tombstone.finalizedAt > FINALIZED_TTL_MS) {
       delete finalized[playId];

@@ -77,7 +77,7 @@ func usageSessions(device rawlog.Device, events []*rawlog.Event, opts Options) (
 			if event.StartTime.After(openStart) {
 				ids := append(openIDs, event.EventID)
 				proposals = append(proposals, Proposal{
-					ID:             makeID(KindTimeIs, SourceDevice, ids),
+					ID:             makeID(KindTimeIs, SourceDevice, device, ids),
 					Kind:           KindTimeIs,
 					Device:         device,
 					Source:         SourceDevice,

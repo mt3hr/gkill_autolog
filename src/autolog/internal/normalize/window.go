@@ -95,7 +95,7 @@ func windowSessions(device rawlog.Device, events []*rawlog.Event, opts Options) 
 			continue
 		}
 		proposals = append(proposals, Proposal{
-			ID:             makeID(KindTimeIs, SourceWindow, segment.eventIDs),
+			ID:             makeID(KindTimeIs, SourceWindow, device, segment.eventIDs),
 			Kind:           KindTimeIs,
 			Device:         device,
 			Source:         SourceWindow,

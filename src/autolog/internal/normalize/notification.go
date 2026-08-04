@@ -128,7 +128,7 @@ func notifications(device rawlog.Device, events []*rawlog.Event, opts Options, c
 		seen[hash] = startTime
 
 		results = append(results, Proposal{
-			ID:             makeID(KindKmemo, SourceNotification, item.eventIDs),
+			ID:             makeID(KindKmemo, SourceNotification, device, item.eventIDs),
 			Kind:           KindKmemo,
 			Device:         device,
 			Source:         SourceNotification,

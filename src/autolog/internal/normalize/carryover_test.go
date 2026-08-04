@@ -626,10 +626,57 @@ func TestConnectionRereadInsideSettledIntervalMakesNoNewInterval(t *testing.T) {
 func TestMakeIDIgnoresDuplicateEventIDs(t *testing.T) {
 	// 読み直しで同じイベントIDが2回入っても識別子は変わらない。
 	// 変わると、同じ区間が別の提案として二重に書き込まれる。
-	once := makeID(KindTimeIs, SourceWindow, []string{"e1", "e2"})
-	twice := makeID(KindTimeIs, SourceWindow, []string{"e1", "e2", "e1"})
+	once := makeID(KindTimeIs, SourceWindow, rawlog.Device("Phone"), []string{"e1", "e2"})
+	twice := makeID(KindTimeIs, SourceWindow, rawlog.Device("Phone"), []string{"e1", "e2", "e1"})
 	if once != twice {
 		t.Errorf("識別子が変わった: %s != %s", once, twice)
+	}
+}
+
+func TestNotificationUpdateSplitAtCutoffStaysTwoRecords(t *testing.T) {
+	// 同一通知キーの更新まとめ (NotificationUpdateWindow) は、バッチの
+	// 切れ目 (cutoff) を跨いでは効かない。まとめの途中状態は持ち越さない
+	// 作りなので、更新列が cutoff を跨ぐと前半と後半で1件ずつになる。
+	// 1回で処理すれば最終状態の1件になる。この差は仕様として許容する
+	// (cutoff は通常午前4時で、跨ぐ更新列は稀。まとめの途中状態まで
+	// 持ち越す複雑さに見合わない)。requirements.md §13 に明記してある。
+	events := []*rawlog.Event{
+		notificationEvent(t, "n1", 0, "same-key", "1件の新着", "最初の本文", false),
+		notificationEvent(t, "n2", 10*min, "same-key", "3件の新着", "最後の本文", false),
+	}
+
+	single := proposalsBySource(runNormalize(t, events, 60*min), SourceNotification)
+	if len(single) != 1 {
+		t.Fatalf("1回で処理した件数 = %d, want 1", len(single))
+	}
+
+	sliced := runNormalizeSliced(t, events, Options{}, []time.Duration{5 * min, 60 * min})
+	var kmemos []Proposal
+	for _, p := range sliced {
+		if p.Source == SourceNotification {
+			kmemos = append(kmemos, p)
+		}
+	}
+	if len(kmemos) != 2 {
+		t.Fatalf("cutoff で分けた件数 = %d, want 2 (前後で1件ずつ)", len(kmemos))
+	}
+	if !strings.Contains(kmemos[0].Content, "1件の新着") {
+		t.Errorf("前半の状態が残っていない: %q", kmemos[0].Content)
+	}
+	if !strings.Contains(kmemos[1].Content, "3件の新着") {
+		t.Errorf("後半の状態が残っていない: %q", kmemos[1].Content)
+	}
+}
+
+func TestMakeIDDistinguishesDevices(t *testing.T) {
+	// 生ログの一意性は (端末, event_id)。Android の event_id はタイムスタンプ
+	// 由来の決定的な値なので、複数端末の構成でたまたま一致しうる。
+	// イベントIDだけで識別子を作ると、台帳の突合で後から来た端末の分が
+	// 「書き込み済み」として黙って落ちる。
+	phone := makeID(KindTimeIs, SourceWindow, rawlog.Device("Phone"), []string{"e1", "e2"})
+	tablet := makeID(KindTimeIs, SourceWindow, rawlog.Device("Tablet"), []string{"e1", "e2"})
+	if phone == tablet {
+		t.Errorf("端末が違うのに識別子が同じ: %s", phone)
 	}
 }
 

@@ -304,8 +304,13 @@ class MainActivity : AppCompatActivity() {
         return enabled?.contains(packageName) == true
     }
 
+    // LocationCollector の判定 (FINE または COARSE) と揃える。
+    // FINE だけを見ると、COARSE のみ許可した端末で「未許可」と表示され続けるのに
+    // 収集は動く、というちぐはぐな状態になる。
     private fun hasLocationPermission(): Boolean =
         checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION) ==
+            android.content.pm.PackageManager.PERMISSION_GRANTED ||
+            checkSelfPermission(android.Manifest.permission.ACCESS_COARSE_LOCATION) ==
             android.content.pm.PackageManager.PERMISSION_GRANTED
 
     private fun requestLocationPermission() {
