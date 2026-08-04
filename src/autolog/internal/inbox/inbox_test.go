@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -223,6 +224,130 @@ func TestIngestFillsDefaultDevice(t *testing.T) {
 	}
 	if len(events) != 1 || events[0].Device != "Phone" {
 		t.Errorf("device が補われていない: %+v", events)
+	}
+}
+
+// paddedEventLine は改行を除いた行全体がちょうど length バイトになるよう
+// 通知本文を詰めた行を作る。詰め物は ASCII なので1文字=1バイト。
+// maxLineBytes の境界検証に使う。
+func paddedEventLine(t *testing.T, eventID string, at time.Time, length int) string {
+	t.Helper()
+	prefix := `{"schema_version":1,"event_id":"` + eventID + `","device":"Phone","event_type":"notification","start_time":"` +
+		rawlog.FormatTime(at) + `","captured_at":"` + rawlog.FormatTime(at) + `","payload":{"app_label":"App","body":"`
+	suffix := `"}}`
+	pad := length - len(prefix) - len(suffix)
+	if pad < 0 {
+		t.Fatalf("length %d が短すぎる (最低 %d バイト)", length, len(prefix)+len(suffix))
+	}
+	return prefix + strings.Repeat("a", pad) + suffix
+}
+
+// maxLineBytes を超える行があるファイルは壊れたものとして丸ごと残し、他のファイルは取り込む。
+// 境界: 行の中身は改行を上限内に収める必要があるため maxLineBytes-1 バイトまで読める。
+// maxLineBytes バイトに達すると改行がバッファに入らず読み取りが失敗する。
+// 壊れたファイルを消すと生ログが恒久に失われるので、残ることも確かめる。
+func TestIngestSkipsFileWithTooLongLine(t *testing.T) {
+	dir := t.TempDir()
+	at := time.Now().Truncate(time.Second)
+
+	// 名前順に取り込むので、壊れたファイルを先頭に置いて後続へ進むことを確かめる。
+	tooLongPath := writeInboxFile(t, dir, "1-toolong.jsonl",
+		paddedEventLine(t, "e-long", at, maxLineBytes))
+	writeInboxFile(t, dir, "2-limit.jsonl",
+		paddedEventLine(t, "e-limit", at.Add(time.Second), maxLineBytes-1))
+	writeInboxFile(t, dir, "3-normal.jsonl",
+		eventLine("e-normal", "Phone", at.Add(2*time.Second)))
+
+	store := openTestStore(t)
+	stats, err := Ingest(context.Background(), store, Options{Dir: dir, DefaultDevice: "Phone"}, quietLogger())
+	if err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+
+	// 壊れたファイルは Files に数えず、後続の2ファイルは取り込む。
+	if stats.Files != 2 || stats.Inserted != 2 || stats.Skipped != 0 {
+		t.Errorf("stats = %+v, want Files=2 Inserted=2 Skipped=0", stats)
+	}
+	if _, err := os.Stat(tooLongPath); err != nil {
+		t.Error("壊れたファイルが消えた (生ログが失われる)")
+	}
+
+	// 上限ぎりぎりの行と通常の行が本当に入っていること。
+	events, err := store.Range(context.Background(), rawlog.RangeQuery{})
+	if err != nil {
+		t.Fatalf("Range: %v", err)
+	}
+	got := make(map[string]bool)
+	for _, e := range events {
+		got[e.EventID] = true
+	}
+	if len(events) != 2 || !got["e-limit"] || !got["e-normal"] {
+		t.Errorf("raw.db の中身 = %v, want e-limit と e-normal", got)
+	}
+
+	// 取り込めた2ファイルは消え、壊れた1ファイルだけが残る。
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "1-toolong.jsonl" {
+		t.Errorf("残ったファイル = %v, want 1-toolong.jsonl のみ", entries)
+	}
+}
+
+// KeepFiles=true (取り込み内容の検証用) ではファイルを消さないこと。
+// raw.db への追記自体は行われるので、繰り返しても (device, event_id) の重複で弾かれ、
+// KeepFiles を外して回すとファイルだけが消える。
+func TestIngestKeepFilesPreservesFiles(t *testing.T) {
+	dir := t.TempDir()
+	at := time.Now().Truncate(time.Second)
+	path := writeInboxFile(t, dir, "a.jsonl", eventLine("e1", "Phone", at))
+
+	store := openTestStore(t)
+	opts := Options{Dir: dir, DefaultDevice: "Phone", KeepFiles: true}
+
+	stats, err := Ingest(context.Background(), store, opts, quietLogger())
+	if err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	if stats.Files != 1 || stats.Inserted != 1 {
+		t.Errorf("stats = %+v, want Files=1 Inserted=1", stats)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatal("KeepFiles=true なのにファイルが消えた")
+	}
+
+	// KeepFiles のまま繰り返しても二重登録にならず、ファイルも残る。
+	stats, err = Ingest(context.Background(), store, opts, quietLogger())
+	if err != nil {
+		t.Fatalf("Ingest(2回目): %v", err)
+	}
+	if stats.Inserted != 0 {
+		t.Errorf("2回目の stats = %+v, want Inserted=0", stats)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatal("2回目の KeepFiles=true でファイルが消えた")
+	}
+
+	// KeepFiles を外すと、重複を弾いたうえでファイルが消える。
+	opts.KeepFiles = false
+	stats, err = Ingest(context.Background(), store, opts, quietLogger())
+	if err != nil {
+		t.Fatalf("Ingest(3回目): %v", err)
+	}
+	if stats.Inserted != 0 {
+		t.Errorf("3回目の stats = %+v, want Inserted=0", stats)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Error("KeepFiles=false なのにファイルが残っている")
+	}
+
+	events, err := store.Range(context.Background(), rawlog.RangeQuery{})
+	if err != nil {
+		t.Fatalf("Range: %v", err)
+	}
+	if len(events) != 1 {
+		t.Errorf("raw.db の件数 = %d, want 1", len(events))
 	}
 }
 

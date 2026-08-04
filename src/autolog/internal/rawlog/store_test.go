@@ -387,6 +387,146 @@ func TestOpenStateIntervalRoundTrip(t *testing.T) {
 	}
 }
 
+func TestOpenStateIntervalEndRoundTrip(t *testing.T) {
+	// end_time は後付けマイグレーションで足した列で、merge は End == nil の
+	// 持ち越しをアプリ利用・メディア再生の続きとして扱わず黙って読み飛ばす。
+	// この往復が壊れると末尾の持ち越しが静かに消えるので、
+	// End の値と nil の両方が正確に保存復元されることを固定する。
+	store := openTestStore(t)
+	ctx := context.Background()
+
+	end := baseTime().Add(20 * time.Minute)
+	app := OpenStateInterval{
+		Device:   "Phone",
+		Source:   "app_usage",
+		Key:      "YouTube Music",
+		Title:    "YouTube Music",
+		Start:    baseTime(),
+		End:      &end,
+		EventIDs: []string{"a1", "a2"},
+	}
+	wifi := OpenStateInterval{
+		Device:   "Phone",
+		Source:   "wifi",
+		Key:      "TestWifi",
+		Title:    "Wi-Fi TestWifi",
+		Start:    baseTime().Add(time.Hour),
+		EventIDs: []string{"w1"},
+	}
+	if err := store.SaveOpenStates(ctx, []OpenStateInterval{app, wifi}); err != nil {
+		t.Fatalf("SaveOpenStates: %v", err)
+	}
+
+	opens, err := store.LoadOpenStates(ctx)
+	if err != nil {
+		t.Fatalf("LoadOpenStates: %v", err)
+	}
+	if len(opens) != 2 {
+		t.Fatalf("件数 = %d, want 2 (%+v)", len(opens), opens)
+	}
+
+	// device, source, state_key 順に返るので app_usage が先。
+	if got := opens[0]; got.Key != app.Key {
+		t.Fatalf("1件目 = %+v, want %s", got, app.Key)
+	}
+	if opens[0].End == nil {
+		t.Fatal("End が nil に化けた (merge が接続区間とみなして読み飛ばし、末尾の持ち越しが消える)")
+	}
+	if !opens[0].End.Equal(end) {
+		t.Errorf("End = %s, want %s", opens[0].End, end)
+	}
+
+	// 接続区間はまだ終わりを観測していないので nil のまま戻ること。
+	// 値が付いて戻ると「もう終わった区間」として誤って確定されうる。
+	if got := opens[1]; got.Key != wifi.Key {
+		t.Fatalf("2件目 = %+v, want %s", got, wifi.Key)
+	}
+	if opens[1].End != nil {
+		t.Errorf("接続区間の End = %v, want nil", opens[1].End)
+	}
+}
+
+func TestNotificationSeenRoundTrip(t *testing.T) {
+	// 同内容の再通知を1件にまとめる判定は取り込み1回のなかで完結せず、
+	// 直近の記録時刻を raw.db へ持ち越して行う。往復が壊れると
+	// 窓の切れ目をまたいだ再通知が毎回 Kyou になる。
+	store := openTestStore(t)
+	ctx := context.Background()
+
+	if seen, err := store.LoadNotificationSeen(ctx); err != nil {
+		t.Fatalf("LoadNotificationSeen: %v", err)
+	} else if len(seen) != 0 {
+		t.Errorf("初期状態の件数 = %d, want 0", len(seen))
+	}
+
+	gmail := NotificationSeen{Device: "Phone", ContentHash: "hash-gmail", LastAt: baseTime()}
+	line := NotificationSeen{Device: "Phone", ContentHash: "hash-line", LastAt: baseTime().Add(time.Hour)}
+	expire := baseTime().Add(-24 * time.Hour)
+	if err := store.SaveNotificationSeen(ctx, []NotificationSeen{line, gmail}, expire); err != nil {
+		t.Fatalf("SaveNotificationSeen: %v", err)
+	}
+
+	seen, err := store.LoadNotificationSeen(ctx)
+	if err != nil {
+		t.Fatalf("LoadNotificationSeen: %v", err)
+	}
+	if len(seen) != 2 {
+		t.Fatalf("件数 = %d, want 2 (%+v)", len(seen), seen)
+	}
+	// device, content_hash 順に返る。
+	if got := seen[0]; got.Device != gmail.Device || got.ContentHash != gmail.ContentHash || !got.LastAt.Equal(gmail.LastAt) {
+		t.Errorf("1件目 = %+v, want %+v", got, gmail)
+	}
+	if got := seen[1]; got.ContentHash != line.ContentHash || !got.LastAt.Equal(line.LastAt) {
+		t.Errorf("2件目 = %+v, want %+v", got, line)
+	}
+
+	// 保存は全件置換。前回保存分は、窓の内側でも渡さなければ消える。
+	// normalize が毎回「持ち越すべき全件」を渡す前提のため、
+	// 差分追記に変わると古い判定材料が残り続けて挙動が変わる。
+	if err := store.SaveNotificationSeen(ctx, []NotificationSeen{line}, expire); err != nil {
+		t.Fatalf("SaveNotificationSeen(2回目): %v", err)
+	}
+	seen, err = store.LoadNotificationSeen(ctx)
+	if err != nil {
+		t.Fatalf("LoadNotificationSeen(2回目): %v", err)
+	}
+	if len(seen) != 1 || seen[0].ContentHash != line.ContentHash {
+		t.Fatalf("入れ替え後 = %+v, want hash-line のみ", seen)
+	}
+}
+
+func TestNotificationSeenExpiresBeforeBoundary(t *testing.T) {
+	// expireBefore は重複判定の窓の外を刈り込む。境界を誤ると、
+	// 窓の内側の記録を捨てて再通知がすり抜けるか、表が増え続ける。
+	// 「より前」だけを捨て、ちょうど・後は残ることを固定する。
+	store := openTestStore(t)
+	ctx := context.Background()
+	expire := baseTime()
+
+	older := NotificationSeen{Device: "Phone", ContentHash: "hash-older", LastAt: expire.Add(-time.Second)}
+	exact := NotificationSeen{Device: "Phone", ContentHash: "hash-exact", LastAt: expire}
+	newer := NotificationSeen{Device: "Phone", ContentHash: "hash-newer", LastAt: expire.Add(time.Second)}
+	if err := store.SaveNotificationSeen(ctx, []NotificationSeen{older, exact, newer}, expire); err != nil {
+		t.Fatalf("SaveNotificationSeen: %v", err)
+	}
+
+	seen, err := store.LoadNotificationSeen(ctx)
+	if err != nil {
+		t.Fatalf("LoadNotificationSeen: %v", err)
+	}
+	if len(seen) != 2 {
+		t.Fatalf("件数 = %d, want 2 (%+v)", len(seen), seen)
+	}
+	// device, content_hash 順に返る。
+	if seen[0].ContentHash != exact.ContentHash {
+		t.Errorf("境界ちょうどの記録が捨てられた: %+v", seen)
+	}
+	if seen[1].ContentHash != newer.ContentHash {
+		t.Errorf("境界より後の記録が残っていない: %+v", seen)
+	}
+}
+
 func TestPutBatchMarksBackfillForLateEvents(t *testing.T) {
 	// 区間イベントは終わってから届くので、取り込みがカーソルを進めた後に
 	// カーソルより過去の start_time で入ることがある。
