@@ -104,6 +104,19 @@ func mergeIntervals(
 				current = &next
 				continue
 			}
+			// 持ち越しより丸ごと過去の区間は結合しない。カーソルの引き戻しで
+			// 書き込み済みの区間を読み直すと起きる形で、途切れなく続いている
+			// わけではない (次の結合判定は負のギャップでも真になってしまう)。
+			// 結合すると書き込み済みイベントと未書き込みの持ち越し末尾が
+			// 混ざった提案になり、一部重複として丸ごと破棄されて末尾が失われる。
+			// 独立して出せば、読み直した分は台帳の包含判定で正しく除外される。
+			// (持ち越しが無ければ区間は開始時刻順に並ぶので、ここは通らない)
+			if interval.end.Before(current.start) {
+				next := interval
+				next.eventIDs = slices.Clone(interval.eventIDs)
+				settled = append(settled, next)
+				continue
+			}
 			if interval.start.Sub(current.end) <= mergeWindow {
 				// 同じキーの区間が途切れずに続いている。1本にまとめる。
 				// 終了時刻は後戻りさせない。区間が重なって届くことがあるため。

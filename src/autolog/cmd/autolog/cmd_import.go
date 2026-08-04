@@ -103,6 +103,13 @@ func newImportCmd() *cobra.Command {
 				fmt.Fprintf(out, "遅れて届いた生ログがあるため %s まで遡って読み直す\n", rawlog.FormatTime(from))
 			}
 
+			// 読む範囲をここで確定した印。Range の後に収集プロセスが挿入した
+			// イベントは今回のバッチに入らないので、カーソルを進める前に
+			// この印より後の挿入を調べて取りこぼしを防ぐ (AdvanceCursorChecked)。
+			rangedRowID, err := store.MaxRowID(ctx)
+			if err != nil {
+				return err
+			}
 			events, err := store.Range(ctx, rawlog.RangeQuery{From: from, To: cutoff})
 			if err != nil {
 				return err
@@ -217,15 +224,12 @@ func newImportCmd() *cobra.Command {
 				fmt.Fprintln(out, "\nカーソルは更新しない")
 				return nil
 			}
-			if err := store.SetCursor(ctx, rawlog.CursorNormalize, cursor); err != nil {
+			// カーソルの前進と合わせて、Range の後に挿入された遅着イベントの
+			// 検査と、読み直した低水位マークの削除も1つのトランザクションで行う。
+			// 取り込みの最中に新しい遅着イベントがマークを更新していたら
+			// 値が一致せず、消えずに次回へ引き継がれる。
+			if err := store.AdvanceCursorChecked(ctx, rawlog.CursorNormalize, cursor, rangedRowID, backfillMark); err != nil {
 				return err
-			}
-			// 読み直した低水位マークを消す。取り込みの最中に新しい遅着イベントが
-			// マークを更新していたら値が一致せず、消えずに次回へ引き継がれる。
-			if !backfillMark.IsZero() {
-				if err := store.ClearBackfillMark(ctx, backfillMark); err != nil {
-					return err
-				}
 			}
 			fmt.Fprintf(out, "\nカーソルを %s まで進めた\n", rawlog.FormatTime(cursor))
 			return nil

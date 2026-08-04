@@ -663,3 +663,68 @@ func TestCarryStateOfSilentDeviceSurvives(t *testing.T) {
 		t.Errorf("端末 = %q, want Phone", result.OpenStates[0].Device)
 	}
 }
+
+func TestPullbackDoesNotAbsorbWrittenIntervalsIntoCarriedTail(t *testing.T) {
+	// カーソルの引き戻し (低水位マーク・書き込み失敗) では、書き込み済みの
+	// 区間と持ち越しの末尾を同じバッチで読み直す。このとき両者が1つの提案へ
+	// 結合されると「一部だけ書き込み済み」の提案になり、Writer の一部重複
+	// ポリシーで丸ごと破棄されて、未書き込みの持ち越し末尾が恒久に失われる。
+	// 読み直した区間は元と同じ提案に戻り、末尾は独立の提案になること。
+
+	early := androidEvent(t, "app-written", rawlog.EventAppUsage, 0, durationPtr(10*min),
+		rawlog.AppUsagePayload{AppLabel: "Chrome", PackageName: "com.android.chrome"})
+	tail := androidEvent(t, "app-carried", rawlog.EventAppUsage, 58*min, durationPtr(59*min+50*sec),
+		rawlog.AppUsagePayload{AppLabel: "Chrome", PackageName: "com.android.chrome"})
+	events := []*rawlog.Event{early, tail}
+
+	// 1回目: 前半は確定して書き込まれ、末尾は cutoff 間際なので持ち越しになる。
+	first := runNormalizeWith(t, events, Options{Cutoff: base().Add(60 * min)})
+	firstApps := proposalsBySource(first, SourceWindow)
+	if len(firstApps) != 1 || len(first.OpenStates) != 1 {
+		t.Fatalf("前提が崩れた: 確定 %d 件 / 持ち越し %d 件, want 1 / 1",
+			len(firstApps), len(first.OpenStates))
+	}
+	writtenID := firstApps[0].ID
+	written := map[string]struct{}{}
+	for _, id := range firstApps[0].SourceEventIDs {
+		written[id] = struct{}{}
+	}
+
+	// 2回目: 引き戻しで同じイベントを持ち越しと一緒に読み直す。
+	second := runNormalizeWith(t, events, Options{
+		Cutoff:     base().Add(120 * min),
+		OpenStates: first.OpenStates,
+	})
+	secondApps := proposalsBySource(second, SourceWindow)
+
+	uniqueIDs := func(ids []string) []string {
+		s := slices.Clone(ids)
+		slices.Sort(s)
+		return slices.Compact(s)
+	}
+	var sawWritten, sawTail bool
+	for _, p := range secondApps {
+		ids := uniqueIDs(p.SourceEventIDs)
+		covered := 0
+		for _, id := range ids {
+			if _, ok := written[id]; ok {
+				covered++
+			}
+		}
+		if covered != 0 && covered != len(ids) {
+			t.Errorf("書き込み済みと未書き込みが混ざった提案ができた (Writer が破棄して末尾が失われる): %v", ids)
+		}
+		if p.ID == writtenID {
+			sawWritten = true
+		}
+		if len(ids) == 1 && ids[0] == "app-carried" {
+			sawTail = true
+		}
+	}
+	if !sawWritten {
+		t.Error("読み直した区間が元と同じ提案に戻っていない (台帳で除外できない)")
+	}
+	if !sawTail {
+		t.Error("持ち越し末尾が独立の提案として確定していない")
+	}
+}
