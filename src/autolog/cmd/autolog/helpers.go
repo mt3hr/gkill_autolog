@@ -78,7 +78,7 @@ func resolveCutoff(flag string) (time.Time, error) {
 // その分が二度と取り込まれない。読み直しの重複は台帳のイベント包含が防ぐ。
 //
 // 2つ目の戻り値は消費した低水位マーク。取り込みが成功したら、呼び出し側が
-// ClearBackfillMark へ渡して消す（取り込み中に新しい遅着があれば値が変わり、消えずに残る）。
+// AdvanceCursorChecked へ渡して消す（取り込み中に新しい遅着があれば値が変わり、消えずに残る）。
 // マークが無いとき・--since 指定時はゼロ値を返す。
 func resolveFrom(ctx context.Context, store *rawlog.Store, flag string) (time.Time, time.Time, error) {
 	if flag != "" {

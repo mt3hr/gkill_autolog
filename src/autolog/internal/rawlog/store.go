@@ -290,9 +290,14 @@ func markBackfill(ctx context.Context, tx *sql.Tx, earliest time.Time) error {
 	if !earliest.Before(cursor) {
 		return nil
 	}
+	return lowerBackfillMark(ctx, tx, earliest)
+}
 
+// lowerBackfillMark は低水位マークを earliest まで下げる。
+// 既にもっと過去（または同じ）を指していればそのままにする。
+func lowerBackfillMark(ctx context.Context, tx *sql.Tx, earliest time.Time) error {
 	var markStr string
-	err = tx.QueryRowContext(ctx, `SELECT value FROM process_cursor WHERE name = ?`, CursorBackfill).Scan(&markStr)
+	err := tx.QueryRowContext(ctx, `SELECT value FROM process_cursor WHERE name = ?`, CursorBackfill).Scan(&markStr)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		// マークが無ければ作る。
@@ -329,6 +334,85 @@ func (s *Store) ClearBackfillMark(ctx context.Context, ifValue time.Time) error 
 		CursorBackfill, storageTime(ifValue))
 	if err != nil {
 		return fmt.Errorf("failed to clear backfill mark: %w", err)
+	}
+	return nil
+}
+
+// MaxRowID は raw_event の現在の最大 rowid を返す。行が無ければ 0。
+//
+// import が「読む範囲をここで確定した」という印に使う。Range を呼ぶ前に
+// 取ること。後に取ると、読み取りと印の間に挿入されたイベントが
+// 「読んだ範囲の中」扱いになり、AdvanceCursorChecked の検査から漏れる。
+func (s *Store) MaxRowID(ctx context.Context) (int64, error) {
+	var maxID int64
+	err := s.db.QueryRowContext(ctx, `SELECT COALESCE(MAX(rowid), 0) FROM raw_event`).Scan(&maxID)
+	if err != nil {
+		return 0, fmt.Errorf("failed to read max rowid: %w", err)
+	}
+	return maxID, nil
+}
+
+// AdvanceCursorChecked は、読み残しの検査・消費した低水位マークの削除・
+// 処理カーソルの前進を、ひとつのトランザクションで行う。
+//
+// import は Range で読んでから書き終えるまでに数分かかる (URLog は1秒に1件)。
+// その間に収集プロセスが挿入したイベントのうち、start_time が
+// 旧カーソルと新カーソルの間のものは、挿入時の markBackfill (旧カーソル基準)
+// の対象にならず、Range のスナップショットにも入っていない。
+// そのままカーソルを進めると二度と読まれず恒久に取りこぼす。
+//
+// そこで afterRowID (Range の前に取った MaxRowID) より後に挿入され、
+// start_time が新カーソルより前のイベントを探し、あればその最小 start_time で
+// 低水位マークを下げてからカーソルを進める。次回の取り込みが読み直す。
+//
+// clearMark は今回の取り込みが読み直しに使った低水位マークの値 (無ければゼロ値)。
+// マークがその値のままなら消す。別々の文で消すと「遅着イベントを見つけて
+// マークを残す」と「消費済みマークを消す」が打ち消し合いうるので、
+// 削除→下げ→前進の順をこのトランザクションの中で確定させる。
+func (s *Store) AdvanceCursorChecked(ctx context.Context, name string, cursor time.Time, afterRowID int64, clearMark time.Time) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction for cursor %s: %w", name, err)
+	}
+
+	var earliestStr sql.NullString
+	err = tx.QueryRowContext(ctx,
+		`SELECT MIN(start_time) FROM raw_event WHERE rowid > ? AND start_time < ?`,
+		afterRowID, storageTime(cursor)).Scan(&earliestStr)
+	if err != nil {
+		return errors.Join(fmt.Errorf("failed to check late events for cursor %s: %w", name, err), tx.Rollback())
+	}
+
+	// 消費したマークを先に消す。取り込み中の挿入がマークをさらに下げていたら
+	// 値が一致せず残り、次回へ引き継がれる (ClearBackfillMark と同じ規約)。
+	if !clearMark.IsZero() {
+		_, err = tx.ExecContext(ctx,
+			`DELETE FROM process_cursor WHERE name = ? AND value = ?`,
+			CursorBackfill, storageTime(clearMark))
+		if err != nil {
+			return errors.Join(fmt.Errorf("failed to clear backfill mark: %w", err), tx.Rollback())
+		}
+	}
+
+	if earliestStr.Valid && earliestStr.String != "" {
+		earliest, err := ParseTime(earliestStr.String)
+		if err != nil {
+			return errors.Join(fmt.Errorf("late event time: %w", err), tx.Rollback())
+		}
+		if err := lowerBackfillMark(ctx, tx, earliest); err != nil {
+			return errors.Join(err, tx.Rollback())
+		}
+	}
+
+	_, err = tx.ExecContext(ctx,
+		`INSERT INTO process_cursor (name, value, updated_at) VALUES (?, ?, ?)
+		 ON CONFLICT(name) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+		name, storageTime(cursor), storageTime(time.Now()))
+	if err != nil {
+		return errors.Join(fmt.Errorf("failed to set cursor %s: %w", name, err), tx.Rollback())
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit cursor %s: %w", name, err)
 	}
 	return nil
 }

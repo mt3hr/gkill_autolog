@@ -530,4 +530,182 @@ func TestClearBackfillMark(t *testing.T) {
 	}
 }
 
+func TestAdvanceCursorCheckedMarksInsertionsDuringImport(t *testing.T) {
+	// import は Range で読んでから書き終えるまでに数分かかる。その間に
+	// 挿入されたイベントのうち、start_time が旧カーソルと新カーソルの間の
+	// ものは挿入時の markBackfill の対象にならない (旧カーソルより未来のため)。
+	// カーソルの前進時に検査して低水位マークを残し、次回読み直せること。
+	ctx := context.Background()
+	oldCursor := baseTime()
+	newCursor := oldCursor.Add(4 * time.Hour)
+
+	t.Run("取り込み中の挿入がマークになる", func(t *testing.T) {
+		store := openTestStore(t)
+		if err := store.SetCursor(ctx, CursorNormalize, oldCursor); err != nil {
+			t.Fatalf("SetCursor: %v", err)
+		}
+
+		// import が読む範囲を確定した (Range を呼んだ) 時点の印。
+		ranged, err := store.MaxRowID(ctx)
+		if err != nil {
+			t.Fatalf("MaxRowID: %v", err)
+		}
+
+		// 書き込み中に、旧カーソルと新カーソルの間のイベントが届く。
+		// 旧カーソルより未来なので挿入時のマークは作られない (前提の確認)。
+		during := mustEvent(t, "during-1", Device("Phone"), EventAppUsage,
+			oldCursor.Add(time.Hour), timePtrOf(oldCursor.Add(2*time.Hour)), AppUsagePayload{AppLabel: "Chrome"})
+		if _, err := store.PutBatch(ctx, []*Event{during}); err != nil {
+			t.Fatalf("PutBatch: %v", err)
+		}
+		if _, ok, err := store.GetCursor(ctx, CursorBackfill); err != nil || ok {
+			t.Fatalf("挿入時にマークができている (ok=%v, err=%v)", ok, err)
+		}
+
+		if err := store.AdvanceCursorChecked(ctx, CursorNormalize, newCursor, ranged, time.Time{}); err != nil {
+			t.Fatalf("AdvanceCursorChecked: %v", err)
+		}
+
+		cursor, _, err := store.GetCursor(ctx, CursorNormalize)
+		if err != nil {
+			t.Fatalf("GetCursor: %v", err)
+		}
+		if !cursor.Equal(newCursor) {
+			t.Errorf("カーソル = %s, want %s", cursor, newCursor)
+		}
+		mark, ok, err := store.GetCursor(ctx, CursorBackfill)
+		if err != nil {
+			t.Fatalf("GetCursor(backfill): %v", err)
+		}
+		if !ok {
+			t.Fatal("取り込み中に挿入されたイベントがマークにならず、恒久に読まれなくなる")
+		}
+		if !mark.Equal(oldCursor.Add(time.Hour)) {
+			t.Errorf("マーク = %s, want %s", mark, oldCursor.Add(time.Hour))
+		}
+	})
+
+	t.Run("消費したマークを消しつつ新しい遅着を残す", func(t *testing.T) {
+		store := openTestStore(t)
+		if err := store.SetCursor(ctx, CursorNormalize, oldCursor); err != nil {
+			t.Fatalf("SetCursor: %v", err)
+		}
+		// 前回の取り込み後に届いていた遅着。今回の import はこのマークまで遡って読む。
+		consumed := mustEvent(t, "late-consumed", Device("Phone"), EventNotification,
+			oldCursor.Add(-time.Hour), nil, NotificationPayload{AppLabel: "Gmail", Title: "件名"})
+		if _, err := store.PutBatch(ctx, []*Event{consumed}); err != nil {
+			t.Fatalf("PutBatch(事前の遅着): %v", err)
+		}
+		usedMark, _, err := store.GetCursor(ctx, CursorBackfill)
+		if err != nil {
+			t.Fatalf("GetCursor(backfill): %v", err)
+		}
+
+		ranged, err := store.MaxRowID(ctx)
+		if err != nil {
+			t.Fatalf("MaxRowID: %v", err)
+		}
+		// 書き込み中の挿入。マークの値は動かない (旧カーソルより未来のため)。
+		during := mustEvent(t, "during-2", Device("Phone"), EventAppUsage,
+			oldCursor.Add(2*time.Hour), timePtrOf(oldCursor.Add(3*time.Hour)), AppUsagePayload{AppLabel: "YouTube"})
+		if _, err := store.PutBatch(ctx, []*Event{during}); err != nil {
+			t.Fatalf("PutBatch(取り込み中): %v", err)
+		}
+
+		if err := store.AdvanceCursorChecked(ctx, CursorNormalize, newCursor, ranged, usedMark); err != nil {
+			t.Fatalf("AdvanceCursorChecked: %v", err)
+		}
+
+		// 消費した分は消え、取り込み中の挿入だけが新しいマークとして残る。
+		// 消費したマークをそのまま消すだけだと、取り込み中の挿入まで一緒に忘れられる。
+		mark, ok, err := store.GetCursor(ctx, CursorBackfill)
+		if err != nil {
+			t.Fatalf("GetCursor(backfill): %v", err)
+		}
+		if !ok {
+			t.Fatal("取り込み中の挿入がマークに残っていない")
+		}
+		if !mark.Equal(oldCursor.Add(2 * time.Hour)) {
+			t.Errorf("マーク = %s, want %s", mark, oldCursor.Add(2*time.Hour))
+		}
+	})
+
+	t.Run("取り込み中にさらに下がったマークは消さない", func(t *testing.T) {
+		store := openTestStore(t)
+		if err := store.SetCursor(ctx, CursorNormalize, oldCursor); err != nil {
+			t.Fatalf("SetCursor: %v", err)
+		}
+		consumed := mustEvent(t, "late-consumed", Device("Phone"), EventNotification,
+			oldCursor.Add(-time.Hour), nil, NotificationPayload{AppLabel: "Gmail", Title: "件名"})
+		if _, err := store.PutBatch(ctx, []*Event{consumed}); err != nil {
+			t.Fatalf("PutBatch(事前の遅着): %v", err)
+		}
+		usedMark, _, err := store.GetCursor(ctx, CursorBackfill)
+		if err != nil {
+			t.Fatalf("GetCursor(backfill): %v", err)
+		}
+
+		ranged, err := store.MaxRowID(ctx)
+		if err != nil {
+			t.Fatalf("MaxRowID: %v", err)
+		}
+		// 取り込み中に、さらに過去の遅着が届いてマークが下がる。
+		older := mustEvent(t, "late-older", Device("Phone"), EventNotification,
+			oldCursor.Add(-2*time.Hour), nil, NotificationPayload{AppLabel: "Gmail", Title: "別の件名"})
+		if _, err := store.PutBatch(ctx, []*Event{older}); err != nil {
+			t.Fatalf("PutBatch(さらに過去): %v", err)
+		}
+
+		if err := store.AdvanceCursorChecked(ctx, CursorNormalize, newCursor, ranged, usedMark); err != nil {
+			t.Fatalf("AdvanceCursorChecked: %v", err)
+		}
+
+		mark, ok, err := store.GetCursor(ctx, CursorBackfill)
+		if err != nil {
+			t.Fatalf("GetCursor(backfill): %v", err)
+		}
+		if !ok {
+			t.Fatal("下がったマークまで消えた")
+		}
+		if !mark.Equal(oldCursor.Add(-2 * time.Hour)) {
+			t.Errorf("マーク = %s, want %s", mark, oldCursor.Add(-2*time.Hour))
+		}
+	})
+
+	t.Run("挿入が無ければマークだけ消える", func(t *testing.T) {
+		store := openTestStore(t)
+		if err := store.SetCursor(ctx, CursorNormalize, oldCursor); err != nil {
+			t.Fatalf("SetCursor: %v", err)
+		}
+		consumed := mustEvent(t, "late-consumed", Device("Phone"), EventNotification,
+			oldCursor.Add(-time.Hour), nil, NotificationPayload{AppLabel: "Gmail", Title: "件名"})
+		if _, err := store.PutBatch(ctx, []*Event{consumed}); err != nil {
+			t.Fatalf("PutBatch(事前の遅着): %v", err)
+		}
+		usedMark, _, err := store.GetCursor(ctx, CursorBackfill)
+		if err != nil {
+			t.Fatalf("GetCursor(backfill): %v", err)
+		}
+		ranged, err := store.MaxRowID(ctx)
+		if err != nil {
+			t.Fatalf("MaxRowID: %v", err)
+		}
+
+		if err := store.AdvanceCursorChecked(ctx, CursorNormalize, newCursor, ranged, usedMark); err != nil {
+			t.Fatalf("AdvanceCursorChecked: %v", err)
+		}
+
+		if _, ok, _ := store.GetCursor(ctx, CursorBackfill); ok {
+			t.Error("消費したマークが消えていない")
+		}
+		cursor, _, err := store.GetCursor(ctx, CursorNormalize)
+		if err != nil {
+			t.Fatalf("GetCursor: %v", err)
+		}
+		if !cursor.Equal(newCursor) {
+			t.Errorf("カーソル = %s, want %s", cursor, newCursor)
+		}
+	})
+}
+
 func timePtrOf(t time.Time) *time.Time { return &t }
