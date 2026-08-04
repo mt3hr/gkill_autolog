@@ -81,6 +81,126 @@ func TestUsageTitleIsConfigurable(t *testing.T) {
 	}
 }
 
+func TestUsageSessionSuspendClosesAndResumeReopens(t *testing.T) {
+	// スリープ中は端末を使っていないので、suspend で区間を閉じ、
+	// resume から新しい区間を始める。閉じずにつなげてしまうと、
+	// 眠っていた時間まで「端末利用」に含まれてしまう。
+	result := runNormalize(t, []*rawlog.Event{
+		event(t, "s1", rawlog.EventSession, 0, nil, rawlog.SessionPayload{Action: rawlog.SessionUnlock}),
+		event(t, "s2", rawlog.EventSession, 30*min, nil, rawlog.SessionPayload{Action: rawlog.SessionSuspend}),
+		event(t, "s3", rawlog.EventSession, 90*min, nil, rawlog.SessionPayload{Action: rawlog.SessionResume}),
+		event(t, "s4", rawlog.EventSession, 120*min, nil, rawlog.SessionPayload{Action: rawlog.SessionLock}),
+	}, 180*min)
+
+	usage := proposalsBySource(result, SourceDevice)
+	if len(usage) != 2 {
+		t.Fatalf("件数 = %d, want 2 (スリープの前後で区間が分かれる) (%+v)", len(usage), usage)
+	}
+	if usage[0].StartTime.Sub(base()) != 0 || usage[0].EndTime.Sub(base()) != 30*min {
+		t.Errorf("1本目 = %v..%v, want 0..%v (suspend で閉じる)",
+			usage[0].StartTime.Sub(base()), usage[0].EndTime.Sub(base()), 30*min)
+	}
+	if usage[1].StartTime.Sub(base()) != 90*min || usage[1].EndTime.Sub(base()) != 120*min {
+		t.Errorf("2本目 = %v..%v, want %v..%v (resume で開き直す)",
+			usage[1].StartTime.Sub(base()), usage[1].EndTime.Sub(base()), 90*min, 120*min)
+	}
+}
+
+func TestUsageSessionClosesAtLogoff(t *testing.T) {
+	// サインアウトはロックを経ずに来ることがある。logoff を閉じる側として
+	// 扱わないと、区間が開いたまま持ち越されてカーソルも進まなくなる。
+	result := runNormalize(t, []*rawlog.Event{
+		event(t, "s1", rawlog.EventSession, 0, nil, rawlog.SessionPayload{Action: rawlog.SessionLogon}),
+		event(t, "s2", rawlog.EventSession, 45*min, nil, rawlog.SessionPayload{Action: rawlog.SessionLogoff}),
+	}, 120*min)
+
+	usage := proposalsBySource(result, SourceDevice)
+	if len(usage) != 1 {
+		t.Fatalf("件数 = %d, want 1 (%+v)", len(usage), usage)
+	}
+	if usage[0].StartTime.Sub(base()) != 0 || usage[0].EndTime.Sub(base()) != 45*min {
+		t.Errorf("区間 = %v..%v, want 0..%v",
+			usage[0].StartTime.Sub(base()), usage[0].EndTime.Sub(base()), 45*min)
+	}
+	// 閉じ切っているので、カーソルは引き戻されず Cutoff まで進む。
+	if cursor := result.SafeCursor.Sub(base()); cursor != 120*min {
+		t.Errorf("SafeCursor = %v, want %v", cursor, 120*min)
+	}
+}
+
+func TestUsageSessionClosesAtRecoveredLock(t *testing.T) {
+	// 補完されたロック (Recovered) は、収集の異常終了後の起動が
+	// 最終入力時刻に置く終了イベント。通常のロックと同じ閉じる側として扱い、
+	// 収集が死んでいた時間を「端末利用」に含めない。
+	// 再起動後は collector_start が新しい区間を開く。
+	result := runNormalize(t, []*rawlog.Event{
+		event(t, "s1", rawlog.EventSession, 0, nil, rawlog.SessionPayload{Action: rawlog.SessionUnlock}),
+		// 収集がクラッシュ。次回起動が最終入力時刻 (30分) に lock を補う。
+		event(t, "s2", rawlog.EventSession, 30*min, nil,
+			rawlog.SessionPayload{Action: rawlog.SessionLock, Recovered: true}),
+		event(t, "s3", rawlog.EventSession, 90*min, nil,
+			rawlog.SessionPayload{Action: rawlog.SessionCollectorStart}),
+		event(t, "s4", rawlog.EventSession, 100*min, nil, rawlog.SessionPayload{Action: rawlog.SessionLock}),
+	}, 180*min)
+
+	usage := proposalsBySource(result, SourceDevice)
+	if len(usage) != 2 {
+		t.Fatalf("件数 = %d, want 2 (死んでいた時間で区間が分かれる) (%+v)", len(usage), usage)
+	}
+	if end := usage[0].EndTime.Sub(base()); end != 30*min {
+		t.Errorf("1本目の終了 = %v, want %v (補完ロックで閉じる)", end, 30*min)
+	}
+	if start := usage[1].StartTime.Sub(base()); start != 90*min {
+		t.Errorf("2本目の開始 = %v, want %v (collector_start で開き直す)", start, 90*min)
+	}
+}
+
+func TestUsageSessionLaterOpenWinsWhenCloseIsMissed(t *testing.T) {
+	// 閉じるイベントが観測漏れのまま次の開始が来た場合は、後から来た方を採用する
+	// （例: クラッシュ中にスリープして suspend が書かれないまま resume が来る）。
+	// 先の開始を残すと、観測できていない時間まで利用に含まれてしまう。
+	result := runNormalize(t, []*rawlog.Event{
+		event(t, "s1", rawlog.EventSession, 0, nil, rawlog.SessionPayload{Action: rawlog.SessionUnlock}),
+		event(t, "s2", rawlog.EventSession, 50*min, nil, rawlog.SessionPayload{Action: rawlog.SessionResume}),
+		event(t, "s3", rawlog.EventSession, 70*min, nil, rawlog.SessionPayload{Action: rawlog.SessionLock}),
+	}, 120*min)
+
+	usage := proposalsBySource(result, SourceDevice)
+	if len(usage) != 1 {
+		t.Fatalf("件数 = %d, want 1 (%+v)", len(usage), usage)
+	}
+	if usage[0].StartTime.Sub(base()) != 50*min || usage[0].EndTime.Sub(base()) != 70*min {
+		t.Errorf("区間 = %v..%v, want %v..%v (後から来た開始を採用)",
+			usage[0].StartTime.Sub(base()), usage[0].EndTime.Sub(base()), 50*min, 70*min)
+	}
+	// 採用しなかった開始は観測漏れの区間なので、根拠のイベントIDにも含めない。
+	for _, id := range usage[0].SourceEventIDs {
+		if id == "s1" {
+			t.Error("採用しなかった開始のイベントIDが根拠に含まれている")
+		}
+	}
+}
+
+func TestUsageSessionZeroLengthIsDropped(t *testing.T) {
+	// 開始と同時刻の終了は長さ0の区間なので TimeIs にしない。
+	// 捨てたあとは開始待ちに戻っており、続く開閉は普通に記録されること。
+	result := runNormalize(t, []*rawlog.Event{
+		event(t, "s1", rawlog.EventSession, 30*min, nil, rawlog.SessionPayload{Action: rawlog.SessionUnlock}),
+		event(t, "s2", rawlog.EventSession, 30*min, nil, rawlog.SessionPayload{Action: rawlog.SessionLock}),
+		event(t, "s3", rawlog.EventSession, 40*min, nil, rawlog.SessionPayload{Action: rawlog.SessionUnlock}),
+		event(t, "s4", rawlog.EventSession, 60*min, nil, rawlog.SessionPayload{Action: rawlog.SessionLock}),
+	}, 120*min)
+
+	usage := proposalsBySource(result, SourceDevice)
+	if len(usage) != 1 {
+		t.Fatalf("件数 = %d, want 1 (長さ0は捨てる) (%+v)", len(usage), usage)
+	}
+	if usage[0].StartTime.Sub(base()) != 40*min || usage[0].EndTime.Sub(base()) != 60*min {
+		t.Errorf("区間 = %v..%v, want %v..%v",
+			usage[0].StartTime.Sub(base()), usage[0].EndTime.Sub(base()), 40*min, 60*min)
+	}
+}
+
 // ---------------------------------------------------------------- ブラウザ
 
 func browserEvent(t *testing.T, id string, start, duration time.Duration, url string) *rawlog.Event {

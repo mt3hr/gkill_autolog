@@ -99,6 +99,25 @@ function fireAlarm() {
   return listeners.alarm[0]({ name: "gkill-autolog-tick" });
 }
 
+function fireTabActivated(tabId, windowId) {
+  return listeners.activated[0]({ tabId, windowId });
+}
+
+function fireTabUpdated(tabId, changeInfo) {
+  return listeners.updated[0](tabId, changeInfo, visibleTab);
+}
+
+function fireFocusChanged(windowId) {
+  return listeners.focus[0](windowId);
+}
+
+// activated / updated / focus のリスナは withState の完了を返さない (投げっぱなし)。
+// 状態を触る処理は直列化チェーンで1列に並ぶので、どのタブにも一致しない
+// onRemoved を後ろに積んで待てば、先行する syncView の完了が保証される。
+function settleListeners() {
+  return fireTabRemoved(-1);
+}
+
 test("タブ閉鎖の閲覧確定と再生の最終報告が並行しても、イベントが両方残る", async () => {
   // 再生中のタブを閉じると onRemoved (閲覧の確定) と pagehide の報告 (再生の確定) が
   // ほぼ同時に走る。storage の get→set が交錯すると後勝ちで片方が消える。
@@ -323,4 +342,212 @@ test("受け口の 400 は原因の1件だけを捨てて、残りは送って�
 
   assert.equal((store.queue || []).length, 0,
     `不正な1件の特定と破棄で前へ進めていない (送信履歴: ${JSON.stringify(sentBatches)})`);
+});
+
+test("差分ゼロの再送が墓標を生かし続け、TTL 超えの再開でも累計を二重計上しない", async () => {
+  // c37715b の回帰テスト。タブを開いたまま FINALIZED_TTL_MS (24時間) を超えて
+  // 一時停止した再生が再開すると、「確定から24時間」で墓標を掃除する実装では
+  // 墓標が消えていて、累計の全量が新しい再生として二重計上されていた。
+  // 掃除の起点は「最後にその playId の報告を見てから」でなければならない。
+  store = {};
+  const realDateNow = Date.now;
+  try {
+    let now = realDateNow();
+    Date.now = () => now;
+    const playStartedAt = now - 200_000;
+    const firstEnd = now - 1_000;
+
+    // (a) 100 秒の再生を確定させ、墓標を作る。
+    await sendMediaProgress({
+      playId: "paused-long",
+      service: "web",
+      url: "https://example.com/movie",
+      title: "映画",
+      playedSeconds: 100,
+      startedAt: playStartedAt,
+      endedAt: firstEnd,
+      finished: true,
+    });
+
+    // (b) 一時停止したまま、content script は累計 100 秒 (差分ゼロ) の報告を続ける。
+    // 8時間おきの再送が墓標の finalizedAt を更新するので、間に心拍の掃除が
+    // 走っても墓標は生き続ける。最後の再送時点で最初の確定から 32 時間 > TTL。
+    for (const hours of [8, 16, 24, 32]) {
+      now = firstEnd + 1_000 + hours * 60 * 60 * 1000;
+      await fireAlarm();
+      await sendMediaProgress({
+        playId: "paused-long",
+        service: "web",
+        url: "https://example.com/movie",
+        title: "映画",
+        playedSeconds: 100,
+        startedAt: playStartedAt,
+        endedAt: firstEnd,
+        finished: false,
+      });
+    }
+
+    // (c) 最初の確定から FINALIZED_TTL_MS を超えたあと、再開して 30 秒進んで終わる。
+    now += 60_000;
+    await sendMediaProgress({
+      playId: "paused-long",
+      service: "web",
+      url: "https://example.com/movie",
+      title: "映画",
+      playedSeconds: 130,
+      startedAt: playStartedAt,
+      endedAt: now - 1_000,
+      finished: true,
+    });
+
+    const plays = (store.queue || []).filter((event) => event.event_type === "media_play");
+    assert.equal(plays.length, 2, "最初の確定と再開の続きで2本になるはず");
+    assert.equal(plays[1].payload.played_seconds, 30,
+      "墓標が消えて累計の全量が新しい再生として二重計上された");
+    assert.equal(plays[1].start_time, new Date(firstEnd).toISOString(),
+      "続きの区間は前回の確定の終了から始まる");
+    const total = plays.reduce((sum, event) => sum + event.payload.played_seconds, 0);
+    assert.equal(total, 130, "合計が実再生時間と一致する (二重計上しない)");
+  } finally {
+    Date.now = realDateNow;
+  }
+});
+
+test("タブ切替で前のタブの閲覧が確定し、新しいタブの閲覧が始まる", async () => {
+  // onActivated は閲覧区間を切り替える主経路。前のタブの区間が閉じられないと
+  // 閲覧が開きっぱなしになり、新しい区間が開かれないと次の閲覧が残らない。
+  store = {};
+  const realDateNow = Date.now;
+  try {
+    let now = realDateNow();
+    Date.now = () => now;
+    store.currentView = {
+      url: "https://example.com/first",
+      title: "前のタブ",
+      tabId: 1,
+      windowId: 1,
+      startedAt: now - 60_000,
+      heartbeatAt: now,
+    };
+
+    // 5 秒後に別のタブへ切り替える。
+    now += 5_000;
+    visibleTab = { id: 2, windowId: 1, url: "https://example.com/second", title: "次のタブ" };
+    fireTabActivated(2, 1);
+    await settleListeners();
+
+    const views = (store.queue || []).filter((event) => event.event_type === "browser_view");
+    assert.equal(views.length, 1, "前のタブの閲覧が確定されていない");
+    assert.equal(views[0].payload.url, "https://example.com/first");
+    assert.equal(views[0].payload.tab_id, 1);
+    assert.equal(views[0].end_time, new Date(now).toISOString(),
+      "前の区間が切り替えた時刻で閉じられていない");
+    assert.ok(store.currentView, "新しいタブの閲覧が開かれていない");
+    assert.equal(store.currentView.tabId, 2);
+    assert.equal(store.currentView.url, "https://example.com/second");
+    assert.equal(store.currentView.startedAt, now,
+      "新しい区間の開始が切り替えた時刻になっていない");
+  } finally {
+    Date.now = realDateNow;
+    visibleTab = null;
+  }
+});
+
+test("同一 URL の再表示は、前の閲覧の続きではなく別の閲覧になる", async () => {
+  // 要件 §7.1。同じタブで A→B→A と行き来したとき、A の2回目を1回目の続きに
+  // すると間に挟まった B と区間が重なる。再表示は新しい startedAt で開き直され、
+  // event_id も別になる (同じだと受け口の (device, event_id) で1件に畳まれて
+  // 2回目の閲覧が消える) ことを検証する。
+  store = {};
+  const realDateNow = Date.now;
+  try {
+    let now = realDateNow();
+    Date.now = () => now;
+    const urlA = "https://example.com/a";
+    const urlB = "https://example.com/b";
+
+    visibleTab = { id: 9, windowId: 1, url: urlA, title: "A" };
+    fireTabActivated(9, 1);
+    await settleListeners();
+    const firstStartedAt = store.currentView.startedAt;
+
+    // 40 秒後に同じタブで B へ遷移する。
+    now += 40_000;
+    visibleTab = { id: 9, windowId: 1, url: urlB, title: "B" };
+    fireTabUpdated(9, { url: urlB });
+    await settleListeners();
+
+    // さらに 20 秒後に A へ戻る (再表示)。
+    now += 20_000;
+    visibleTab = { id: 9, windowId: 1, url: urlA, title: "A" };
+    fireTabUpdated(9, { url: urlA });
+    await settleListeners();
+    assert.equal(store.currentView.url, urlA);
+    assert.equal(store.currentView.startedAt, now,
+      "再表示が前の区間の続き扱いになっている");
+
+    // 30 秒後にブラウザから離れて、2回目の A も確定させる。
+    now += 30_000;
+    visibleTab = null;
+    fireFocusChanged(-1);
+    await settleListeners();
+
+    const views = (store.queue || []).filter((event) => event.event_type === "browser_view");
+    assert.deepEqual(views.map((event) => event.payload.url), [urlA, urlB, urlA],
+      "A→B→A の3区間にならなかった");
+    const aViews = views.filter((event) => event.payload.url === urlA);
+    assert.notEqual(aViews[0].event_id, aViews[1].event_id,
+      "再表示が同じ event_id になり、受け口で1件に畳まれてしまう");
+    assert.equal(aViews[0].end_time, new Date(firstStartedAt + 40_000).toISOString(),
+      "1回目の A が B へ遷移した時刻で閉じられていない");
+    assert.equal(aViews[1].start_time, new Date(firstStartedAt + 60_000).toISOString(),
+      "2回目の A が再表示の時刻から始まっていない");
+  } finally {
+    Date.now = realDateNow;
+    visibleTab = null;
+  }
+});
+
+test("タイトルが後から確定したとき、閲覧中の区間を開き直さずタイトルだけ更新する", async () => {
+  // 読み込み直後のタブは title が空のまま閲覧が始まることがある。
+  // 後から届く onUpdated (title) で拾い直さないと browser_view が空タイトルで
+  // 残り、逆に開き直してしまうと1つの閲覧が分断される。
+  store = {};
+  const realDateNow = Date.now;
+  try {
+    let now = realDateNow();
+    Date.now = () => now;
+    visibleTab = { id: 11, windowId: 1, url: "https://example.com/slow", title: "" };
+    fireTabActivated(11, 1);
+    await settleListeners();
+    const openedAt = now;
+    assert.equal(store.currentView.title, "", "開始時点ではタイトルが未確定のはず");
+
+    // 10 秒後にタイトルが確定して onUpdated が届く。
+    now += 10_000;
+    visibleTab = { id: 11, windowId: 1, url: "https://example.com/slow", title: "遅れて確定したタイトル" };
+    fireTabUpdated(11, { title: "遅れて確定したタイトル" });
+    await settleListeners();
+
+    assert.equal(store.currentView.title, "遅れて確定したタイトル",
+      "閲覧中のビューのタイトルが更新されていない");
+    assert.equal(store.currentView.startedAt, openedAt,
+      "タイトルの確定で区間が開き直された (1つの閲覧が分断される)");
+    assert.equal((store.queue || []).length, 0,
+      "タイトルの確定だけでイベントができた");
+
+    // 20 秒後にタブを閉じると、確定後のタイトルで1本の browser_view になる。
+    now += 20_000;
+    visibleTab = null;
+    await fireTabRemoved(11);
+
+    const views = (store.queue || []).filter((event) => event.event_type === "browser_view");
+    assert.equal(views.length, 1, "閲覧が1本に確定されていない");
+    assert.equal(views[0].payload.title, "遅れて確定したタイトル");
+    assert.equal(views[0].start_time, new Date(openedAt).toISOString(),
+      "区間の開始が最初に開いた時刻のまま保たれていない");
+  } finally {
+    Date.now = realDateNow;
+    visibleTab = null;
+  }
 });
