@@ -1,6 +1,5 @@
 package com.mt3hr.gkill_autolog
 
-import android.Manifest
 import android.app.ActivityManager
 import android.app.Notification
 import android.app.NotificationChannel
@@ -9,7 +8,6 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.Handler
@@ -57,7 +55,9 @@ class AutologService : Service() {
 
     /**
      * 書き出しと撮影のスレッド。
-     * 収集は主スレッドのタイマーで回しているので、ファイル入出力は必ず別スレッドで行う。
+     * 共有ストレージへの書き出しや su 越しの読み取りは長引くことがあるので、
+     * 主スレッドのタイマーで回している収集を巻き込まないよう、ここへ逃がす。
+     * (イベントの SQLite への追記は端末内で軽いため主スレッドのまま行っている)
      */
     private val ioExecutor: ExecutorService = Executors.newSingleThreadExecutor()
 

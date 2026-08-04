@@ -107,18 +107,6 @@ func resolveFrom(ctx context.Context, store *rawlog.Store, flag string) (time.Ti
 	return from, mark, nil
 }
 
-// proposalTime は提案が指す時刻を返す。カーソルの引き戻しに使う。
-func proposalTime(proposal normalize.Proposal) time.Time {
-	switch {
-	case proposal.StartTime != nil:
-		return *proposal.StartTime
-	case proposal.RelatedTime != nil:
-		return *proposal.RelatedTime
-	default:
-		return time.Time{}
-	}
-}
-
 // writeJSONL は1行1JSONで書き出す。件数が0でもファイルは作る。
 func writeJSONL[T any](path string, items []T) error {
 	file, err := os.Create(path)

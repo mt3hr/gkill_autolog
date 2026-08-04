@@ -7,7 +7,7 @@ import (
 	"github.com/mt3hr/gkill_autolog/src/autolog/internal/rawlog"
 )
 
-// windowTimeIs は windowSessions の結果を検証しやすい形に落とす。
+// interval は windowSessions の結果を検証しやすい形に落とす。
 type interval struct {
 	title string
 	start time.Duration

@@ -88,10 +88,10 @@ func TestLoadWritten(t *testing.T) {
 	}
 }
 
-func TestIsCovered(t *testing.T) {
+func TestCoveredCountDetectsFragments(t *testing.T) {
 	// カーソルの引き戻しで確定済み区間を途中から読み直すと、
 	// イベントの部分集合から別 id の提案が再構成される。
-	// 元イベントがすべて記録済みなら断片とみなして弾けること。
+	// 元イベントがすべて記録済み (covered == total) なら断片とみなして弾けること。
 	l := openTestLedger(t)
 	ctx := context.Background()
 
@@ -127,12 +127,12 @@ func TestIsCovered(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			covered, err := l.IsCovered(ctx, tt.kind, tt.source, tt.device, tt.eventIDs)
+			covered, total, err := l.CoveredCount(ctx, tt.kind, tt.source, tt.device, tt.eventIDs)
 			if err != nil {
-				t.Fatalf("IsCovered: %v", err)
+				t.Fatalf("CoveredCount: %v", err)
 			}
-			if covered != tt.want {
-				t.Errorf("IsCovered = %v, want %v", covered, tt.want)
+			if got := total > 0 && covered == total; got != tt.want {
+				t.Errorf("covered=%d total=%d (断片=%v), want 断片=%v", covered, total, got, tt.want)
 			}
 		})
 	}

@@ -347,7 +347,7 @@ class MainActivity : AppCompatActivity() {
     companion object {
         private const val REQUEST_PERMISSIONS = 1
 
-        /** 送信結果を見せておく時間。 */
+        /** 書き出し結果を見せておく時間。 */
         private const val STATUS_MESSAGE_MS = 3000L
 
         /** 画面に出す、落ちた記録の末尾の文字数。 */

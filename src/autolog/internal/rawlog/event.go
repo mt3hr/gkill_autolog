@@ -29,9 +29,9 @@ const maxDeviceNameLength = 64
 
 // ValidateDeviceName は端末名として使える書式かを返す。
 //
-// 端末名は gkill のタグになり、スクリーンショットのディレクトリ名
-// Screenshot_<端末>_<YYYYMMDD> の一部にもなる。
-// そのため区切り文字のアンダースコアと空白は使えない。
+// 端末名は Kyou の create_device に入り、端末別ユーザー名 (<接頭辞><端末名>) や
+// スクリーンショットのディレクトリ名 AutoScreenshot_<端末>_<YYYYMMDD> の
+// 一部にもなる。そのため区切り文字のアンダースコアと空白は使えない。
 func ValidateDeviceName(device Device) error {
 	name := string(device)
 	if strings.TrimSpace(name) == "" {
@@ -43,7 +43,7 @@ func ValidateDeviceName(device Device) error {
 	for _, r := range name {
 		switch {
 		case r == '_':
-			// Screenshot_<端末>_<YYYYMMDD> の区切りと衝突する。
+			// AutoScreenshot_<端末>_<YYYYMMDD> の区切りと衝突する。
 			return fmt.Errorf("device %q must not contain an underscore", name)
 		case unicode.IsSpace(r), unicode.IsControl(r):
 			return fmt.Errorf("device %q must not contain whitespace or control characters", name)

@@ -674,9 +674,10 @@ func TestMediaPlayWithURLAlsoCreatesTimeIs(t *testing.T) {
 	}
 }
 
-func TestMediaPlayWithURLMergesTimeIsBySameTitle(t *testing.T) {
-	// 同じタイトルの再生が続いていれば TimeIs は1本にまとめる。
-	// URLog は再生の都度作るので、TimeIs 1本に URLog が複数並ぶ。
+func TestMediaPlayWithURLMergesTimeIsBySameVideo(t *testing.T) {
+	// 同じ再生 (mediaMergeKey: 動画ID > URL > タイトル) が続いていれば
+	// TimeIs は1本にまとめる。URLog は再生の都度作るので、
+	// TimeIs 1本に URLog が複数並ぶ。
 	const url = "https://www.youtube.com/watch?v=abc"
 	result := runNormalize(t, []*rawlog.Event{
 		mediaEvent(t, "m1", 0, 120, url),

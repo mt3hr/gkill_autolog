@@ -10,7 +10,9 @@ import android.view.accessibility.AccessibilityEvent
  * 画面の中身は読み取らず、どのアプリが前面になったかだけを覚える。
  *
  * ここでは生ログを書かない。書くと UsageStats と二重になるため、
- * 前面アプリの現在値を保持するだけにして、必要な収集側が参照する。
+ * 前面アプリの現在値を保持するだけにしてある。
+ * ただし、いまこの値を参照する収集側は無い（要件 §8.2 の取得優先順位 3 の
+ * メディア取得は未実装）。将来の布石として残しており、許可は必須ではない。
  */
 class AutologAccessibilityService : AccessibilityService() {
 

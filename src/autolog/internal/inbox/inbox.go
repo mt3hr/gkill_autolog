@@ -1,4 +1,5 @@
-// Package inbox は共有ディレクトリに置かれた JSONL の生ログを raw.db へ取り込む。
+// Package inbox は共有ディレクトリに置かれた JSONL の生ログを raw.db へ取り込む
+// （**Android の受け口**。Chrome 拡張からの HTTP 受け取りは ingest が担う）。
 //
 // Android では収集アプリと autolog が別のアプリで、共有ストレージ (/sdcard) 経由でしか
 // 受け渡せない。共有ストレージは FUSE で、複数プロセスから SQLite を開くと

@@ -121,7 +121,8 @@ func (l *Ledger) LoadWritten(ctx context.Context) (map[string]struct{}, error) {
 //
 // eventIDs は提案の元になった生ログのイベントID。
 // カーソルの引き戻しで同じイベントの部分集合から別 id の提案が再構成されたとき、
-// IsCovered がこれを使って弾く。提案本体と同じトランザクションで記録し、
+// CoveredCount の判定 (gkillclient.Writer が行う) がこれを使って弾く。
+// 提案本体と同じトランザクションで記録し、
 // 「提案は載っているのに元イベントが載っていない」中途半端な状態を残さない。
 func (l *Ledger) Record(ctx context.Context, proposalID, kind, source, device, kyouID string, eventIDs []string) error {
 	tx, err := l.db.BeginTx(ctx, nil)
@@ -152,26 +153,16 @@ func (l *Ledger) Record(ctx context.Context, proposalID, kind, source, device, k
 	return nil
 }
 
-// IsCovered は提案の元イベントがすべて記録済みかを返す。
-//
-// true なら、この提案は既に書き込んだ区間をカーソルの引き戻しで
-// 読み直しただけの断片であり、書き込むと二重登録になる。
-// 台帳を導入する前に書き込んだ分には元イベントの記録が無いので、
-// その範囲の断片は検出できない（一度書かれてしまうと以後は検出できる）。
-func (l *Ledger) IsCovered(ctx context.Context, kind, source, device string, eventIDs []string) (bool, error) {
-	covered, total, err := l.CoveredCount(ctx, kind, source, device, eventIDs)
-	if err != nil {
-		return false, err
-	}
-	return total > 0 && covered == total, nil
-}
-
 // CoveredCount は提案の元イベントのうち記録済みの件数と、重複を除いた総数を返す。
 //
-// covered == total なら既に書いた区間の断片（IsCovered と同じ判定）。
+// covered == total (total > 0) なら、この提案は既に書き込んだ区間を
+// カーソルの引き戻しで読み直しただけの断片であり、書き込むと二重登録になる。
 // 0 < covered < total は「書き込み済みイベントと新しいイベントが混ざった提案」で、
 // 遅れて届いた生ログが確定済みの区間を延ばしたときにできる。
 // これをどう扱うかは収集元によって違うので、判断は書き込み側 (gkillclient.Writer) が行う。
+//
+// 台帳を導入する前に書き込んだ分には元イベントの記録が無いので、
+// その範囲の断片は検出できない（一度書かれてしまうと以後は検出できる）。
 func (l *Ledger) CoveredCount(ctx context.Context, kind, source, device string, eventIDs []string) (covered int, total int, err error) {
 	unique := make([]string, 0, len(eventIDs))
 	seen := map[string]struct{}{}

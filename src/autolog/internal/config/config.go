@@ -22,16 +22,16 @@ import (
 
 // 環境変数名。
 const (
-	EnvHome             = "AUTOLOG_HOME"
-	EnvDevice           = "AUTOLOG_DEVICE"
-	EnvIngestAddr       = "AUTOLOG_INGEST_ADDR"
-	EnvIngestToken      = "AUTOLOG_INGEST_TOKEN"
-	EnvScreenshotDir    = "AUTOLOG_SCREENSHOT_DIR"
-	EnvGkillBaseURL     = "GKILL_BASE_URL"
-	EnvGkillUser        = "GKILL_USER"
-	EnvGkillPasswordSHA = "GKILL_PASSWORD_SHA256"
-	EnvGkillInsecure    = "GKILL_INSECURE"
-	EnvAllowedDevices   = "AUTOLOG_ALLOWED_DEVICES"
+	EnvHome                = "AUTOLOG_HOME"
+	EnvDevice              = "AUTOLOG_DEVICE"
+	EnvIngestAddr          = "AUTOLOG_INGEST_ADDR"
+	EnvIngestToken         = "AUTOLOG_INGEST_TOKEN"
+	EnvScreenshotDir       = "AUTOLOG_SCREENSHOT_DIR"
+	EnvGkillBaseURL        = "GKILL_BASE_URL"
+	EnvGkillUser           = "GKILL_USER"
+	EnvGkillPasswordSHA256 = "GKILL_PASSWORD_SHA256"
+	EnvGkillInsecure       = "GKILL_INSECURE"
+	EnvAllowedDevices      = "AUTOLOG_ALLOWED_DEVICES"
 
 	// EnvUsageTitle は端末利用 TimeIs のタイトル。
 	// 「Windows利用」のように端末ごとに呼び分けたいときに設定する。
@@ -48,8 +48,8 @@ const (
 	// EnvAutoUserPrefix は端末別ユーザー名の接頭辞。
 	// 実際のユーザー名は 接頭辞 + 端末名（例: 接頭辞が myuser_auto_ なら myuser_auto_Laptop）。
 	EnvAutoUserPrefix = "GKILL_AUTO_USER_PREFIX"
-	// EnvAutoPasswordSHA は端末別ユーザー共通のパスワード。
-	EnvAutoPasswordSHA = "GKILL_AUTO_PASSWORD_SHA256"
+	// EnvAutoPasswordSHA256 は端末別ユーザー共通のパスワード。
+	EnvAutoPasswordSHA256 = "GKILL_AUTO_PASSWORD_SHA256"
 )
 
 // ConfigFileName は環境変数の代わりに設定を書けるファイル。
@@ -220,12 +220,12 @@ func Load() (*Config, error) {
 		ScreenshotInterval:  ClampScreenshotInterval(ParseDuration(lookup(EnvScreenshotInterval), DefaultScreenshotInterval)),
 		GkillBaseURL:        lookupOr(EnvGkillBaseURL, DefaultGkillBaseURL),
 		GkillUser:           lookup(EnvGkillUser),
-		GkillPasswordSHA256: lookup(EnvGkillPasswordSHA),
+		GkillPasswordSHA256: lookup(EnvGkillPasswordSHA256),
 		GkillInsecure:       isTruthy(lookup(EnvGkillInsecure)),
 		AllowedDevices:      allowedDevices,
 		UsageTitle:          lookup(EnvUsageTitle),
 		AutoUserPrefix:      lookup(EnvAutoUserPrefix),
-		AutoPasswordSHA256:  lookup(EnvAutoPasswordSHA),
+		AutoPasswordSHA256:  lookup(EnvAutoPasswordSHA256),
 	}, nil
 }
 
@@ -338,7 +338,7 @@ func resolveHome() (string, error) {
 	}
 	userHome, err := os.UserHomeDir()
 	if err != nil {
-		return "", fmt.Errorf("failed to resolve %s: %w", EnvHome, err)
+		return "", fmt.Errorf("%s を解決できない: %w", EnvHome, err)
 	}
 	return filepath.Join(userHome, ".gkill_autolog"), nil
 }
@@ -394,7 +394,7 @@ func (c *Config) ScreenshotFileName(t time.Time, ext string) string {
 func (c *Config) EnsureDirs() error {
 	for _, dir := range []string{c.Home, c.LogDir(), c.WorkDir()} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return fmt.Errorf("failed to create directory %s: %w", dir, err)
+			return fmt.Errorf("ディレクトリを作れない %s: %w", dir, err)
 		}
 	}
 	return nil
@@ -420,21 +420,21 @@ func (c *Config) resolvePersistedToken(fileName string) (string, error) {
 			return token, nil
 		}
 	case !errors.Is(err, fs.ErrNotExist):
-		return "", fmt.Errorf("failed to read token file %s: %w", path, err)
+		return "", fmt.Errorf("トークンファイルを読めない %s: %w", path, err)
 	}
 
 	var buf [32]byte
 	if _, err := rand.Read(buf[:]); err != nil {
-		return "", fmt.Errorf("failed to generate token: %w", err)
+		return "", fmt.Errorf("トークンを生成できない: %w", err)
 	}
 	token := hex.EncodeToString(buf[:])
 
 	if err := os.MkdirAll(c.Home, 0o755); err != nil {
-		return "", fmt.Errorf("failed to create directory %s: %w", c.Home, err)
+		return "", fmt.Errorf("ディレクトリを作れない %s: %w", c.Home, err)
 	}
 	// 共有トークンなので所有者だけが読めるようにする。
 	if err := os.WriteFile(path, []byte(token+"\n"), 0o600); err != nil {
-		return "", fmt.Errorf("failed to write token file %s: %w", path, err)
+		return "", fmt.Errorf("トークンファイルを書けない %s: %w", path, err)
 	}
 	return token, nil
 }

@@ -17,8 +17,8 @@ func newScreenshotCmd() *cobra.Command {
 		Use:   "screenshot",
 		Short: "スクリーンショットを1枚撮影して保存する",
 		Long: "スクリーンショットを1枚撮影して保存する。\n" +
-			"通常は autolog collect が毎時00分に自動で撮るため、これは動作確認用。\n" +
-			"タスクスケジューラから毎時実行させる構成にする場合は collect に --no-screenshot を付ける。",
+			"通常は autolog collect が設定した間隔 (既定は毎時00分) で自動で撮るため、これは動作確認用。\n" +
+			"タスクスケジューラから定期実行させる構成にする場合は collect に --no-screenshot を付ける。",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cfg, err := config.Load()
 			if err != nil {

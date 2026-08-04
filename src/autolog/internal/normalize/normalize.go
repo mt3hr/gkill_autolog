@@ -51,7 +51,7 @@ const (
 	// MinWindowDuration はこれ未満のウィンドウ操作を TimeIs にしない。
 	//
 	// 要件に規定は無いが、下限が無いと一瞬触っただけのウィンドウが大量に Kyou になる。
-	// 閲覧 URLog (30秒) やアプリ利用 (30秒) と同じ考え方で下限を設ける。
+	// 閲覧 URLog (30秒) やアプリ利用 (1分) と同じ考え方で下限を設ける。
 	// 判定は割り込みの結合を済ませたあとに行う。
 	// 短い区間どうしが結合されて下限を超えることがあるため。
 	MinWindowDuration = time.Minute
@@ -271,7 +271,7 @@ func Run(events []*rawlog.Event, opts Options) (*Result, error) {
 	}
 
 	slices.SortFunc(result.Proposals, func(a, b Proposal) int {
-		at, bt := a.sortTime(), b.sortTime()
+		at, bt := a.Time(), b.Time()
 		if !at.Equal(bt) {
 			return at.Compare(bt)
 		}
@@ -287,8 +287,9 @@ func (r *Result) limitCursor(cursor time.Time) {
 	}
 }
 
-// sortTime は並べ替えに使う時刻を返す。
-func (p Proposal) sortTime() time.Time {
+// Time は提案が指す代表時刻を返す（開始時刻 > 発生時刻）。
+// 並べ替え・カーソルの引き戻し・タグの関連時刻がこれを使う。
+func (p Proposal) Time() time.Time {
 	switch {
 	case p.StartTime != nil:
 		return *p.StartTime

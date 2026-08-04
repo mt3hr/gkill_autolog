@@ -16,7 +16,7 @@ import (
 //   - 持ち越しは Result から次回の Options へ渡す
 //   - 台帳と同じ二重の重複排除を行う。提案IDの一致に加え、
 //     元イベントがすべて書き込み済みの提案（確定済み区間の断片）も落とす
-//     （ledger.IsCovered 相当）。カーソルの引き戻しで同じイベントを
+//     （ledger.CoveredCount の covered == total 相当）。カーソルの引き戻しで同じイベントを
 //     読み直すことがあり、それ自体は正しい動きだからである。
 func runNormalizeSliced(t *testing.T, events []*rawlog.Event, opts Options, cutoffs []time.Duration) []Proposal {
 	t.Helper()
@@ -90,7 +90,7 @@ func runNormalizeSliced(t *testing.T, events []*rawlog.Event, opts Options, cuto
 // sortProposals は比較できるよう提案を並べる。
 func sortProposals(proposals []Proposal) {
 	slices.SortFunc(proposals, func(a, b Proposal) int {
-		at, bt := a.sortTime(), b.sortTime()
+		at, bt := a.Time(), b.Time()
 		if !at.Equal(bt) {
 			return at.Compare(bt)
 		}

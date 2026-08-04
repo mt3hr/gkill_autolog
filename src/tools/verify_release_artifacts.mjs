@@ -7,7 +7,7 @@
 // Android 向けのつもりが Windows のバイナリ (MZ) になったことがある。
 // ファイル名では気づけないので、中身を見て確かめる。
 
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { closeSync, existsSync, openSync, readSync, statSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 
@@ -32,12 +32,18 @@ const expected = [
 
 /** 先頭のバイトから形式と CPU を読む。 */
 function inspect(fullPath) {
+  // 判定に要るのは先頭 20 バイトだけ。APK は数十 MB あるので全部は読まない。
   const head = Buffer.alloc(20);
-  const handle = readFileSync(fullPath).subarray(0, 20);
-  handle.copy(head);
+  const fd = openSync(fullPath, "r");
+  try {
+    readSync(fd, head, 0, head.length, 0);
+  } finally {
+    closeSync(fd);
+  }
 
   if (head[0] === 0x7f && head.subarray(1, 4).toString() === "ELF") {
-    // e_machine は 16 バイト目からの 2 バイト（リトルエンディアン）。
+    // e_machine は e_ident (16 バイト) と e_type (2 バイト) の後、
+    // オフセット 18 からの 2 バイト（リトルエンディアン）。
     return { format: "elf", arch: ELF_MACHINE[head.readUInt16LE(18)] ?? `不明(0x${head.readUInt16LE(18).toString(16)})` };
   }
   if (head[0] === 0x4d && head[1] === 0x5a) return { format: "pe" };

@@ -24,12 +24,12 @@ object SharedStorage {
     val eventsDir: File
         get() = File(root, "events")
 
-    /** スクリーンショットの置き場。dvnf.sh が AutoScreenshot へ運ぶ。 */
+    /** スクリーンショットの置き場。gkill 側の同期スクリプトが AutoScreenshot へ運ぶ。 */
     val screenshotsDir: File
         get() = File(root, "screenshots")
 
     /**
-     * GPX の置き場。dvnf.sh が GPSLogs へ運ぶ。
+     * GPX の置き場。gkill 側の同期スクリプトが GPSLogs へ運ぶ。
      *
      * 日別に YYYYMMDD.gpx を置く。この名前でないと gkill が日付で見つけられない
      * (gps_log_repository_gpx_dir_impl.go の findGPXFileByDate)。
