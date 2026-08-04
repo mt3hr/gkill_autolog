@@ -46,7 +46,9 @@
         android:name="android.permission.BLUETOOTH"
         android:maxSdkVersion="30" />
 
-    <!-- 前面アプリの表示状態を補う。 -->
+    <!-- 他アプリの表示名 (app_label) を取るためのパッケージ可視性の宣言。
+         Android 11 以降はこれが無いと getApplicationInfo が失敗し、
+         アプリ利用・再生・通知の記録が黙ってパッケージ名に落ちる。 -->
     <queries>
         <intent>
             <action android:name="android.intent.action.MAIN" />

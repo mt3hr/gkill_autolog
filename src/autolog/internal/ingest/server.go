@@ -1,4 +1,5 @@
-// Package ingest は Chrome 拡張からイベントを受け取る HTTP サーバ。
+// Package ingest は Chrome 拡張からイベントを受け取る HTTP サーバ
+// （**Chrome の受け口**。Android からの JSONL の受け渡しは inbox が担う）。
 //
 //	POST /ingest  Chrome 拡張から。127.0.0.1 のみに bind する。
 //
@@ -110,7 +111,7 @@ func serveMux(ctx context.Context, name, addr string, mux *http.ServeMux, path s
 		}
 	}()
 
-	logger.Info("受け口を開いた", "name", name, "addr", listener.Addr().String(), "path", path)
+	logger.Info("Chrome の受け口を開いた", "name", name, "addr", listener.Addr().String(), "path", path)
 
 	if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return fmt.Errorf("failed to serve %s: %w", name, err)

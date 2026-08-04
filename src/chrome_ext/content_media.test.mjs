@@ -81,7 +81,7 @@ function fireVisibilityChange() {
   }
 }
 
-// playSeconds 秒ぶん再生を進める。1 tick で 0.9 秒進める (maxDelta 1 秒の内側)。
+// seconds 秒ぶん再生を進める。1 tick で 0.9 秒進める (maxDelta 1 秒の内側)。
 function playFor(video, seconds) {
   for (let played = 0; played < seconds; played += 0.9) {
     video.currentTime += 0.9;

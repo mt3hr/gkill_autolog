@@ -41,8 +41,6 @@ type WriteStats struct {
 	// Overlapped は書き込み済みの区間と一部重なるため書き込まなかった件数。
 	// 遅れて届いた生ログが確定済みの区間を延ばしたときに起きる。
 	Overlapped int
-	// Dropped は判定で捨てた件数。
-	Dropped int
 	// Failed は書き込みに失敗した件数。
 	Failed int
 	// FailedProposalIDs は書き込みに失敗した提案。次回の再処理範囲を決めるのに使う。
@@ -69,11 +67,8 @@ func NewWriter(resolve ClientResolver, ledgerDB *ledger.Ledger, logger *slog.Log
 
 // WriteAll は提案をまとめて書き込む。
 //
-// keep が false の提案は判定で捨てられたものとして書き込まない。
-// keep に載っていない提案は判定対象外（URL 候補ではない）なので書き込む。
-//
 // 1件の失敗で全体を止めない。失敗した分は台帳に記録しないので次回再処理される。
-func (w *Writer) WriteAll(ctx context.Context, proposals []normalize.Proposal, keep map[string]bool) (*WriteStats, error) {
+func (w *Writer) WriteAll(ctx context.Context, proposals []normalize.Proposal) (*WriteStats, error) {
 	stats := &WriteStats{}
 
 	written, err := w.ledger.LoadWritten(ctx)
@@ -117,11 +112,6 @@ func (w *Writer) WriteAll(ctx context.Context, proposals []normalize.Proposal, k
 				"start", formatOptional(proposal.StartTime), "end", formatOptional(proposal.EndTime))
 			continue
 		}
-		if decision, judged := keep[proposal.ID]; judged && !decision {
-			stats.Dropped++
-			continue
-		}
-
 		if err := w.writeOne(ctx, proposal, stats); err != nil {
 			stats.Failed++
 			stats.FailedProposalIDs = append(stats.FailedProposalIDs, proposal.ID)
@@ -163,7 +153,7 @@ func (w *Writer) writeOne(ctx context.Context, proposal normalize.Proposal, stat
 			Device:      proposal.Device,
 			TargetID:    kyouID,
 			Tag:         tag,
-			RelatedTime: proposalTime(proposal),
+			RelatedTime: proposal.Time(),
 		})
 		if err != nil {
 			// タグが付かなくても本体は書けている。台帳へは記録して二重登録を防ぐ。
@@ -294,18 +284,6 @@ func (w *Writer) waitForURLogRateLimit(ctx context.Context) {
 		}
 	}
 	w.lastURLogAt = time.Now()
-}
-
-// proposalTime は提案が指す時刻を返す。タグの関連時刻に使う。
-func proposalTime(proposal normalize.Proposal) time.Time {
-	switch {
-	case proposal.StartTime != nil:
-		return *proposal.StartTime
-	case proposal.RelatedTime != nil:
-		return *proposal.RelatedTime
-	default:
-		return time.Time{}
-	}
 }
 
 func formatOptional(t *time.Time) string {

@@ -3,8 +3,10 @@
 // collect と import はどちらも多重起動すると実害がある。
 //   - collect: 2個目が recoverUnfinishedSession で偽の recovered lock を書き、
 //     collector_start / collector_stop で稼働中の利用セッションを分断する
-//   - import: 台帳の既書き込み判定が起動時のスナップショットなので、
-//     並行実行すると同じ提案が両方から gkill へ書かれ Kyou が重複する
+//   - import: Kyou の ID は提案から決定的に導くので単純な二重登録には
+//     ならないが、収集と並行すると2つの実行が読む範囲・持ち越しがずれて
+//     別 ID の提案が組み上がりうる。ほかにも台帳スナップショットの不整合や、
+//     URLog のサーバ取得・ログイン枠 (IP ごとに 15 分で 10 回) の浪費がある
 //
 // OS のファイルロック (Windows: LockFileEx / それ以外: flock) を使う。
 // プロセスが死ねば OS がロックを解放するので、消し忘れたロックファイルが

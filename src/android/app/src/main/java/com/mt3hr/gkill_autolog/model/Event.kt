@@ -9,7 +9,7 @@ import java.util.UUID
 /**
  * 共通生ログの1件。
  *
- * スキーマは gkill_autolog/schema/event.schema.json と対応している。
+ * スキーマは gkill_autolog の src/autolog/schema/event.schema.json と対応している。
  * 元のタイトル・URL・通知内容は加工前の生値で保持する。
  */
 data class Event(
@@ -99,6 +99,9 @@ object EventType {
 object SessionAction {
     const val UNLOCK = "unlock"
     const val SCREEN_OFF = "screen_off"
+
+    // Android では画面消灯 (SCREEN_OFF) が利用終了の合図で、LOCK は出さない。
+    // スキーマの語彙と揃えるために置いてある。
     const val LOCK = "lock"
     const val COLLECTOR_START = "collector_start"
     const val COLLECTOR_STOP = "collector_stop"

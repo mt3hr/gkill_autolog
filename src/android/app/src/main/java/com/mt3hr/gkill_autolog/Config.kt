@@ -14,7 +14,7 @@ import android.util.Log
 class Config(context: Context) {
 
     private val preferences =
-        context.applicationContext.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE)
+        context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
     /**
      * この端末の名前。gkill の端末名と揃える。
@@ -176,7 +176,8 @@ class Config(context: Context) {
 
     companion object {
         private const val TAG = "AutologConfig"
-        private const val PREFERENCES_NAME = "gkill_autolog"
+        // 定数名は各所の PREFS_NAME と揃える。ファイル名は保存済みデータとの互換のため変えない。
+        private const val PREFS_NAME = "gkill_autolog"
         private const val KEY_DEVICE = "device"
         private const val KEY_COLLECTION_ENABLED = "collection_enabled"
         private const val KEY_READ_CHROME_HISTORY = "read_chrome_history"

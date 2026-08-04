@@ -45,13 +45,14 @@ func newImportCmd() *cobra.Command {
 			}
 
 			// 取り込みの多重起動を防ぐ。
-			// 台帳の既書き込み判定は起動時のスナップショットで、Kyou の ID は
-			// 書き込みごとに採番される。並行して走ると両方が「未書き込み」と
-			// 判定して同じ区間の Kyou を二重に登録してしまう。
+			// Kyou の ID は提案から決定的に導くので単純な二重登録にはならないが、
+			// 並行して走ると2つの実行が読む範囲・持ち越し・台帳スナップショットで
+			// ずれて別 ID の提案が組み上がりうるうえ、URLog のサーバ取得と
+			// ログイン枠 (IP ごとに 15 分で 10 回) を二重に消費する。
 			// (午前4時のタスクと手動実行・同期スクリプトの重なりが現実に起きる)
 			lock, err := proclock.Acquire(filepath.Join(cfg.Home, "import.lock"))
 			if errors.Is(err, proclock.ErrBusy) {
-				return fmt.Errorf("別の取り込みが実行中のため中止した。並行して走らせると同じ Kyou が二重に登録される: %w", err)
+				return fmt.Errorf("別の取り込みが実行中のため中止した: %w", err)
 			}
 			if err != nil {
 				return err
@@ -78,7 +79,7 @@ func newImportCmd() *cobra.Command {
 				Dir:            cfg.InboxDir(),
 				AllowedDevices: cfg.AllowedDevices,
 				DefaultDevice:  cfg.Device,
-				// dry-run では受け口のファイルを消さない。
+				// dry-run では Android の受け口のファイルを消さない。
 				// 生ログの取り込み自体は冪等なので消しても失われはしないが、
 				// 「試しただけ」のつもりで手元のファイルが消えるのは意図に反する。
 				KeepFiles: dryRun,
@@ -87,7 +88,7 @@ func newImportCmd() *cobra.Command {
 				return err
 			}
 			if inboxStats.Files > 0 {
-				fmt.Fprintf(out, "受け口:   %d ファイル / %d 件読み込み / %d 件追加 / %d 件除外\n",
+				fmt.Fprintf(out, "Android の受け口: %d ファイル / %d 件読み込み / %d 件追加 / %d 件除外\n",
 					inboxStats.Files, inboxStats.Read, inboxStats.Inserted, inboxStats.Skipped)
 			}
 
@@ -181,7 +182,7 @@ func newImportCmd() *cobra.Command {
 				DryRun:       dryRun,
 				DescribeUser: cfg.GkillUserFor,
 			})
-			stats, err := writer.WriteAll(ctx, result.Proposals, nil)
+			stats, err := writer.WriteAll(ctx, result.Proposals)
 			if err != nil {
 				return err
 			}
@@ -338,7 +339,7 @@ func pullBackCursor(safeCursor time.Time, proposals []normalize.Proposal, failed
 		if _, ok := failed[proposal.ID]; !ok {
 			continue
 		}
-		if at := proposalTime(proposal); !at.IsZero() && at.Before(cursor) {
+		if at := proposal.Time(); !at.IsZero() && at.Before(cursor) {
 			cursor = at
 		}
 	}

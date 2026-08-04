@@ -14,7 +14,10 @@ import com.mt3hr.gkill_autolog.export.JsonlExporter
  * /sdcard/gkill_autolog/events には出てこない。叩かないと
  * 「取り込んだが直近の分が入っていない」状態になる。
  *
- *   am broadcast -n com.mt3hr.gkill_autolog/.ExportReceiver
+ *   am broadcast --user 0 -f 0x20 -n com.mt3hr.gkill_autolog/.ExportReceiver
+ *
+ * (--user 0 はシェルからの明示。-f 0x20 = FLAG_INCLUDE_STOPPED_PACKAGES で、
+ * 強制停止状態のアプリにも届ける。operations-guide.md の実運用形と揃えてある)
  *
  * intent-filter は付けない。呼ぶ側にコンポーネント名を明示させることで、
  * 他のアプリのブロードキャストにたまたま反応することがなくなる。
@@ -49,7 +52,8 @@ class ExportReceiver : BroadcastReceiver() {
     }
 
     companion object {
-        private const val TAG = "ExportReceiver"
+        // ログタグは他の書き出し系と同じ Autolog 接頭辞で揃える (logcat でまとめて絞るため)。
+        private const val TAG = "AutologExport"
 
         /** 書き出せなかったときの結果コード。成功時は書き出した件数を返す。 */
         const val RESULT_FAILED = -1

@@ -136,7 +136,8 @@ func migrate(db *sql.DB) error {
 
 // hasColumn は表に列があるかを返す。
 func hasColumn(db *sql.DB, table string, column string) (bool, error) {
-	// table はコード内の定数なので、プレースホルダを使えない pragma へ直接埋めてよい。
+	// PRAGMA table_info と違い、テーブル値関数の pragma_table_info には
+	// プレースホルダで渡せる。
 	rows, err := db.Query(`SELECT name FROM pragma_table_info(?)`, table)
 	if err != nil {
 		return false, fmt.Errorf("failed to read columns of %s: %w", table, err)

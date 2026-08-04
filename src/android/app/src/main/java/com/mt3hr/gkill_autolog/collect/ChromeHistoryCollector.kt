@@ -222,7 +222,8 @@ class ChromeHistoryCollector(
     }
 
     companion object {
-        private const val TAG = "ChromeHistory"
+        // ログタグは他の収集と同じ Autolog 接頭辞で揃える (logcat でまとめて絞るため)。
+        private const val TAG = "AutologChrome"
         private const val HISTORY_DB_PATH =
             "/data/data/com.android.chrome/app_chrome/Default/History"
 

@@ -45,7 +45,7 @@ func newCollectCmd() *cobra.Command {
 			// 2個目のインスタンスは、稼働中インスタンスの開きっぱなしセッションを
 			// 「前回の異常終了」と誤認して偽の recovered lock を書き、
 			// さらに collector_start / collector_stop を書いてから
-			// 受け口のポート衝突で死ぬ。利用セッションが分断され、
+			// Chrome の受け口のポート衝突で死ぬ。利用セッションが分断され、
 			// 接続区間も観測の切れ目として閉じられてしまう。
 			lock, err := proclock.Acquire(filepath.Join(cfg.Home, "collect.lock"))
 			if errors.Is(err, proclock.ErrBusy) {

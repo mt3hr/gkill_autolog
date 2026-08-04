@@ -8,10 +8,12 @@ import com.mt3hr.gkill_autolog.model.Event
 import org.json.JSONObject
 
 /**
- * 端末内の生ログ。追記専用。
+ * 書き出し待ちイベントの置き場。
  *
- * 書き出せたイベントだけを消すので、取り込みが止まっていても失われない。
- * 書き出しの成否が確定するまで保持し、確定するまで削除しない（要件 §17）。
+ * 収集したイベントをここへ溜め、JsonlExporter が共有ストレージの
+ * 受け渡し用 JSONL へ書き出す。設計上の「生ログ (raw.db)」は autolog 側に
+ * あり、ここはそこへ届くまでの中継。書き出せたイベントだけを消すので、
+ * 取り込みが止まっていても失われない（要件 §17）。
  */
 class EventStore(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME, null, DATABASE_VERSION) {
 
@@ -53,7 +55,7 @@ class EventStore(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME, nu
         )
     }
 
-    /** 未送信のイベントを古い順に取り出す。 */
+    /** 未書き出しのイベントを古い順に取り出す。 */
     fun take(limit: Int): List<StoredEvent> {
         val result = mutableListOf<StoredEvent>()
         readableDatabase.query(
@@ -81,7 +83,7 @@ class EventStore(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME, nu
         return result
     }
 
-    /** 送信できたイベントを消す。送信に成功した分だけを渡すこと。 */
+    /** 書き出せたイベントを消す。書き出しに成功した分だけを渡すこと。 */
     fun delete(rowIds: List<Long>) {
         if (rowIds.isEmpty()) return
         val placeholders = rowIds.joinToString(",") { "?" }
@@ -92,7 +94,7 @@ class EventStore(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME, nu
         )
     }
 
-    /** 未送信の件数。 */
+    /** 未書き出しの件数。 */
     fun pendingCount(): Int =
         readableDatabase.rawQuery("SELECT COUNT(*) FROM pending_event", null).use { cursor ->
             if (cursor.moveToFirst()) cursor.getInt(0) else 0
@@ -102,10 +104,10 @@ class EventStore(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME, nu
         private const val DATABASE_NAME = "autolog_raw.db"
         private const val DATABASE_VERSION = 1
 
-        /** 1回の送信で送る上限。 */
-        const val UPLOAD_BATCH_SIZE = 500
+        /** 1回の書き出しで扱う上限。 */
+        const val EXPORT_BATCH_SIZE = 500
     }
 }
 
-/** 保存済みイベント。rowId は送信成功後の削除に使う。 */
+/** 保存済みイベント。rowId は書き出し成功後の削除に使う。 */
 data class StoredEvent(val rowId: Long, val event: Event)

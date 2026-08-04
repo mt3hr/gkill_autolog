@@ -56,7 +56,7 @@ class MediaCollector(
      * 次の起動時に「控えの時点で終わった再生」として確定させる。
      */
     private val checkpoint =
-        context.getSharedPreferences(CHECKPOINT_PREFS, Context.MODE_PRIVATE)
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
     init {
         recoverFromCheckpoint()
@@ -278,7 +278,8 @@ class MediaCollector(
     companion object {
         private const val TAG = "AutologMedia"
 
-        private const val CHECKPOINT_PREFS = "media_checkpoint"
+        // 定数名は各所の PREFS_NAME と揃える。ファイル名は保存済みデータとの互換のため変えない。
+        private const val PREFS_NAME = "media_checkpoint"
         private const val CHECKPOINT_KEY = "playing"
 
         private const val PACKAGE_YOUTUBE = "com.google.android.youtube"

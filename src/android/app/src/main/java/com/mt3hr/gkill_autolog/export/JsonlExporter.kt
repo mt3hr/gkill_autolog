@@ -45,7 +45,7 @@ class JsonlExporter(context: Context) {
 
         var exported = 0
         while (true) {
-            val stored = store.take(EventStore.UPLOAD_BATCH_SIZE)
+            val stored = store.take(EventStore.EXPORT_BATCH_SIZE)
             if (stored.isEmpty()) break
 
             val lines = StringBuilder()
@@ -61,7 +61,7 @@ class JsonlExporter(context: Context) {
             store.delete(stored.map { it.rowId })
             exported += stored.size
 
-            if (stored.size < EventStore.UPLOAD_BATCH_SIZE) break
+            if (stored.size < EventStore.EXPORT_BATCH_SIZE) break
         }
         return exported
     }

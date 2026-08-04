@@ -85,7 +85,7 @@ func TestWriteAllSkipsFragmentsOfWrittenProposals(t *testing.T) {
 	// 1回目: 全体の区間を書き込む。
 	stats, err := writer.WriteAll(ctx, []normalize.Proposal{
 		timeIsProposal("p-full", []string{"a1", "a2"}),
-	}, nil)
+	})
 	if err != nil {
 		t.Fatalf("WriteAll(1回目): %v", err)
 	}
@@ -98,7 +98,7 @@ func TestWriteAllSkipsFragmentsOfWrittenProposals(t *testing.T) {
 	stats, err = writer.WriteAll(ctx, []normalize.Proposal{
 		timeIsProposal("p-fragment", []string{"a2"}),
 		timeIsProposal("p-extended", []string{"a2", "a3"}),
-	}, nil)
+	})
 	if err != nil {
 		t.Fatalf("WriteAll(2回目): %v", err)
 	}
@@ -115,7 +115,7 @@ func TestWriteAllSkipsFragmentsOfWrittenProposals(t *testing.T) {
 	// まったく別のイベントからの提案は通る。
 	stats, err = writer.WriteAll(ctx, []normalize.Proposal{
 		timeIsProposal("p-new", []string{"b1", "b2"}),
-	}, nil)
+	})
 	if err != nil {
 		t.Fatalf("WriteAll(3回目): %v", err)
 	}
@@ -152,7 +152,7 @@ func TestWriteAllPartialOverlapPolicies(t *testing.T) {
 	// Wi-Fi B の区間が同じ marker を共有して閉じる。B は書けること。
 	stats, err := writer.WriteAll(ctx, []normalize.Proposal{
 		sourcedTimeIsProposal("p-wifi-a", normalize.SourceWifi, []string{"c1", "m1"}),
-	}, nil)
+	})
 	if err != nil {
 		t.Fatalf("WriteAll(Wi-Fi A): %v", err)
 	}
@@ -161,7 +161,7 @@ func TestWriteAllPartialOverlapPolicies(t *testing.T) {
 	}
 	stats, err = writer.WriteAll(ctx, []normalize.Proposal{
 		sourcedTimeIsProposal("p-wifi-b", normalize.SourceWifi, []string{"c2", "m1"}),
-	}, nil)
+	})
 	if err != nil {
 		t.Fatalf("WriteAll(Wi-Fi B): %v", err)
 	}
@@ -172,7 +172,7 @@ func TestWriteAllPartialOverlapPolicies(t *testing.T) {
 	// 通知: 更新列の前半が書かれたあと、続きの更新を含む提案も書けること。
 	stats, err = writer.WriteAll(ctx, []normalize.Proposal{
 		kmemoProposal("p-notif-first", []string{"n1", "n2"}),
-	}, nil)
+	})
 	if err != nil {
 		t.Fatalf("WriteAll(通知1): %v", err)
 	}
@@ -181,7 +181,7 @@ func TestWriteAllPartialOverlapPolicies(t *testing.T) {
 	}
 	stats, err = writer.WriteAll(ctx, []normalize.Proposal{
 		kmemoProposal("p-notif-updated", []string{"n1", "n2", "n3"}),
-	}, nil)
+	})
 	if err != nil {
 		t.Fatalf("WriteAll(通知2): %v", err)
 	}
@@ -227,7 +227,7 @@ func TestKyouIDIsDeterministicAcrossRetries(t *testing.T) {
 			t.Fatalf("ledger.Open: %v", err)
 		}
 		writer := NewWriter(resolve, ledgerDB, slog.New(slog.DiscardHandler), WriteOptions{})
-		if _, err := writer.WriteAll(context.Background(), []normalize.Proposal{proposal}, nil); err != nil {
+		if _, err := writer.WriteAll(context.Background(), []normalize.Proposal{proposal}); err != nil {
 			t.Fatalf("WriteAll: %v", err)
 		}
 		ledgerDB.Close()

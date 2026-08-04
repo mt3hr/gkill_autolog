@@ -16,7 +16,7 @@ import (
 //
 // 画面がロックされている場合は撮らずに ErrLocked を返す（要件 §10）。
 // スリープ中はそもそもこの関数が呼ばれない（タイマーが動かない、
-// あるいは復帰後の次の正時まで待つ）ため、撮り逃した分の補完は行わない。
+// あるいは復帰後の次の区切りまで待つ）ため、撮り逃した分の補完は行わない。
 func Capture(cfg *config.Config, capturedAt time.Time) (*Result, error) {
 	if winapi.IsSessionLocked() {
 		return nil, ErrLocked
