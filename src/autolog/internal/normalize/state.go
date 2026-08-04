@@ -225,7 +225,7 @@ func connectionStates(device rawlog.Device, events []*rawlog.Event, opts Options
 			}
 
 			proposals = append(proposals, Proposal{
-				ID:             makeID(KindTimeIs, group.source, interval.eventIDs),
+				ID:             makeID(KindTimeIs, group.source, device, interval.eventIDs),
 				Kind:           KindTimeIs,
 				Device:         device,
 				Source:         group.source,

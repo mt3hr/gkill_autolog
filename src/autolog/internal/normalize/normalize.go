@@ -307,7 +307,14 @@ func (p Proposal) sortTime() time.Time {
 // 同じイベントIDが2回入っていても1回として扱う。
 // カーソルの引き戻しで同じイベントを読み直すことがあり、
 // 重複を数えていると読み直しの有無で識別子が変わってしまう。
-func makeID(kind Kind, source string, eventIDs []string) string {
+//
+// 端末名も入れる。生ログの一意性は (端末, event_id) なので、別々の端末が
+// たまたま同じ event_id (タイムスタンプ由来の決定的な値) を作ると、
+// イベントIDだけでは別の観測の提案が同じ識別子になり、台帳の突合で
+// 後から来た端末の分が「書き込み済み」として黙って落ちてしまう。
+// この変更で既存の台帳と識別子が変わるが、書き込み済みの読み直しは
+// イベント包含 (CoveredCount。こちらは端末込み) が除外するので安全。
+func makeID(kind Kind, source string, device rawlog.Device, eventIDs []string) string {
 	ids := slices.Clone(eventIDs)
 	slices.Sort(ids)
 	ids = slices.Compact(ids)
@@ -316,6 +323,8 @@ func makeID(kind Kind, source string, eventIDs []string) string {
 	hash.Write([]byte(string(kind)))
 	hash.Write([]byte{0})
 	hash.Write([]byte(source))
+	hash.Write([]byte{0})
+	hash.Write([]byte(string(device)))
 	for _, id := range ids {
 		hash.Write([]byte{0})
 		hash.Write([]byte(id))

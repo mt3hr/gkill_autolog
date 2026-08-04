@@ -125,7 +125,7 @@ func browserViews(device rawlog.Device, events []*rawlog.Event, denyList *DenyLi
 			continue
 		}
 
-		id := makeID(KindURLog, SourceBrowser, []string{event.EventID})
+		id := makeID(KindURLog, SourceBrowser, device, []string{event.EventID})
 		proposals = append(proposals, Proposal{
 			ID:             id,
 			Kind:           KindURLog,
@@ -196,7 +196,7 @@ func mediaPlays(device rawlog.Device, events []*rawlog.Event, opts Options, carr
 		// 落としたいものを url_denylist.txt で抑えられる必要がある。
 		if url := strings.TrimSpace(payload.URL); url != "" && !opts.DenyList.Matches(url) {
 			proposals = append(proposals, Proposal{
-				ID:             makeID(KindURLog, SourceMedia, []string{event.EventID}),
+				ID:             makeID(KindURLog, SourceMedia, device, []string{event.EventID}),
 				Kind:           KindURLog,
 				Device:         device,
 				Source:         SourceMedia,
@@ -229,7 +229,7 @@ func mediaPlays(device rawlog.Device, events []*rawlog.Event, opts Options, carr
 
 	for _, interval := range merged {
 		proposals = append(proposals, Proposal{
-			ID:             makeID(KindTimeIs, SourceMedia, interval.eventIDs),
+			ID:             makeID(KindTimeIs, SourceMedia, device, interval.eventIDs),
 			Kind:           KindTimeIs,
 			Device:         device,
 			Source:         SourceMedia,
@@ -349,7 +349,7 @@ func appUsages(device rawlog.Device, events []*rawlog.Event, opts Options, carri
 			continue
 		}
 		proposals = append(proposals, Proposal{
-			ID:             makeID(KindTimeIs, SourceWindow, interval.eventIDs),
+			ID:             makeID(KindTimeIs, SourceWindow, device, interval.eventIDs),
 			Kind:           KindTimeIs,
 			Device:         device,
 			Source:         SourceWindow,
