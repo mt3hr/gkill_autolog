@@ -7,6 +7,12 @@
 // Android は versionCode の引き下げを拒むので、上げ忘れると入れ替えられなくなる。
 //
 // 出力は release/android_apk/gkill_autolog.apk。
+//
+// release ビルドで作る。debug ビルドは debuggable なうえ、署名鍵が
+// 機械ごとの debug keystore になるため、別の機械で組み直すと署名不一致で
+// 上書きできず、アンインストール（＝未書き出しの記録の喪失）を強いられる。
+// 署名の設定は ~/.gradle/gradle.properties か環境変数から読む
+// （リポジトリには置かない。作り方は documents/reverse/dev-setup.md）。
 
 import { execSync } from "node:child_process";
 import { chmodSync, copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -41,11 +47,11 @@ const command =
   process.platform === "win32" ? `"${path.join(androidDir, "gradlew.bat")}"` : "./gradlew";
 
 execSync(
-  `${command} assembleDebug -PversionName=${version} -PversionCode=${versionCode}`,
+  `${command} assembleRelease -PversionName=${version} -PversionCode=${versionCode}`,
   { cwd: androidDir, stdio: "inherit" },
 );
 
-const built = path.join(androidDir, "app", "build", "outputs", "apk", "debug", "app-debug.apk");
+const built = path.join(androidDir, "app", "build", "outputs", "apk", "release", "app-release.apk");
 const released = path.join(outDir, "gkill_autolog.apk");
 copyFileSync(built, released);
 

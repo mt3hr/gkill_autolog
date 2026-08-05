@@ -122,7 +122,7 @@
         </receiver>
 
         <!--
-          Termux の autolog.sh から書き出しをさせるための受け口。
+          Termux の取り込みスクリプトから書き出しをさせるための受け口。
           intent-filter は付けない。呼ぶ側にコンポーネント名を明示させる。
         -->
         <receiver

@@ -187,6 +187,13 @@ class MainActivity : AppCompatActivity() {
             .getOrElse { "状態を取得できませんでした: ${it.message}" }
     }
 
+    /**
+     * 状況表示を組み立てる。
+     *
+     * この画面だけは文字列を strings.xml へ出さない。桁を揃えた等幅の
+     * 診断表示で、書式と項目名が一体になっているためで、切り出すと
+     * かえって崩れやすくなる。翻訳の予定も無い（他の言語のリソースは無い）。
+     */
     private fun buildStatusText(): String {
         val pending = JsonlExporter(this).pendingCount()
         // 開きっぱなしにすると onResume のたびに接続が増える。
@@ -204,7 +211,7 @@ class MainActivity : AppCompatActivity() {
             appendLine()
             appendLine("書き出し先: ${SharedStorage.eventsDir}")
             appendLine("GPX:        ${SharedStorage.gpsLogDir}")
-            append("取り込みは Termux の autolog.sh が行います")
+            append("取り込みは Termux の autolog が行います")
 
             // 落ちた記録があれば気づけるようにする。
             val crashLog = java.io.File(SharedStorage.root, AutologApp.CRASH_LOG_NAME)

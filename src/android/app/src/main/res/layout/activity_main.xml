@@ -21,16 +21,20 @@
         android:orientation="vertical"
         android:padding="16dp">
 
+        <!-- 入力欄には labelFor で見出しを結び付ける (読み上げのため)。
+             どれも自動入力の対象にならない設定値なので importantForAutofill を no にする。
+             autofillHints="" は警告を黙らせるだけで、意図が伝わらない。 -->
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
+            android:labelFor="@+id/device"
             android:text="@string/label_device" />
 
         <EditText
             android:id="@+id/device"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:autofillHints=""
+            android:importantForAutofill="no"
             android:inputType="text" />
 
         <CheckBox
@@ -50,13 +54,14 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="12dp"
+            android:labelFor="@+id/screenshot_interval"
             android:text="@string/label_screenshot_interval" />
 
         <EditText
             android:id="@+id/screenshot_interval"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:autofillHints=""
+            android:importantForAutofill="no"
             android:inputType="number" />
 
         <CheckBox
@@ -76,26 +81,28 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="12dp"
+            android:labelFor="@+id/location_interval"
             android:text="@string/label_location_interval" />
 
         <EditText
             android:id="@+id/location_interval"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:autofillHints=""
+            android:importantForAutofill="no"
             android:inputType="number" />
 
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="12dp"
+            android:labelFor="@+id/location_accuracy"
             android:text="@string/label_location_accuracy" />
 
         <EditText
             android:id="@+id/location_accuracy"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:autofillHints=""
+            android:importantForAutofill="no"
             android:inputType="number" />
 
         <CheckBox

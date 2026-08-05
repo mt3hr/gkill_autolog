@@ -9,7 +9,7 @@ import com.mt3hr.gkill_autolog.export.JsonlExporter
 /**
  * 外から書き出しをさせるための受け口。
  *
- * Termux の autolog.sh が取り込みの直前にこれを叩く。
+ * Termux の取り込みスクリプトが取り込みの直前にこれを叩く。
  * 収集した記録はアプリ内の DB に溜まっていて、書き出すまで
  * /sdcard/gkill_autolog/events には出てこない。叩かないと
  * 「取り込んだが直近の分が入っていない」状態になる。

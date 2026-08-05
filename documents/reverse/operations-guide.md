@@ -223,6 +223,27 @@ npm run build_android_apk
 npm run install_apk        # adb install。手で入れるなら release/android_apk/gkill_autolog.apk
 ```
 
+APK は release ビルドで、署名鍵の用意が要ります
+（[dev-setup.md](dev-setup.md) 参照）。
+
+**debug ビルドの APK が既に入っている端末では、署名が違うため上書きできません。**
+一度アンインストールする必要があり、アプリ内に溜まったままの記録は消えます。
+入れ替える前に書き出しと取り込みを済ませてください。
+
+```sh
+# 1. 端末で「今すぐ書き出し」を押す（またはブロードキャストで書き出させる）
+am broadcast --user 0 -f 0x20 -n com.mt3hr.gkill_autolog/.ExportReceiver
+
+# 2. 取り込む（events/ が空になることを確かめる）
+autolog import --until-now
+ls /sdcard/gkill_autolog/events/
+
+# 3. 消して入れ直す。設定 (config.env) と共有ストレージの中身は残る
+```
+
+`/sdcard/gkill_autolog/` はアプリ専用領域ではないので、
+アンインストールしても設定・スクリーンショット・GPX は消えません。
+
 画面から順に許可します。
 
 | 権限 | 何に要るか | 無いとどうなるか |
