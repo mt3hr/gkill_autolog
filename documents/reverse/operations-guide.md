@@ -18,13 +18,45 @@ gkill の追加 API は書き込み先リポジトリを指定できないため
 ユーザー名は `<接頭辞><端末名>` です。端末名は
 `gkill_server dvnf get` が返すディレクトリ名と揃えます。
 
+**PC (Windows) の gkill には、付属のスクリプトを使います。**
+
 ```powershell
-.\src\scripts\setup_auto_users.ps1 -UserPrefix myuser_auto_ -Devices Laptop
+.\src\scripts\setup_auto_users.ps1 -AdminUser admin -UserPrefix myuser_auto_ -Devices Laptop
 ```
 
-管理者アカウントと、PATH に通った `sqlite3.exe` が要ります
+`-AdminUser` には gkill の管理者アカウント名を渡します（必須。省略すると
+文脈の無いプロンプトが出ます）。パスワードは実行中に聞かれ、画面には出ません。
+ほかに PATH に通った `sqlite3.exe` が要ります
 （既存のアカウントと発行済みのリセットトークンを `account.db` から直接読むため）。
 `do_initialize` で既定のリポジトリも作られるので、置き場所は既定のままで構いません。
+
+**Android (Termux の gkill) では、このスクリプトは使えません。**
+PowerShell と PC 側の `account.db` を前提にしているためです。`-BaseUrl` で
+Termux の gkill を指しても、リセットトークンは PC 側の DB から読むので成立しません。
+Termux 側では次のように API を直接叩きます（`curl` は本物なのでそのまま使えます）。
+
+```sh
+# 1. 管理者でログインして session_id を得る
+curl -sk -X POST "$BASE/api/login" -H 'Content-Type: application/json' \
+  -d '{"user_id":"admin","password_sha256":"<64桁>","locale_name":"ja"}'
+
+# 2. 端末別ユーザーを作る（既定のリポジトリも一緒に作られる）
+curl -sk -X POST "$BASE/api/add_user" -H 'Content-Type: application/json' \
+  -d '{"session_id":"<session_id>","do_initialize":true,"locale_name":"ja",
+       "account_info":{"user_id":"myuser_auto_Phone","is_admin":false,"is_enable":true}}'
+
+# 3. 発行されたリセットトークンでパスワードを設定する
+sqlite3 ~/gkill/configs/account.db \
+  "select USER_ID, PASSWORD_RESET_TOKEN from ACCOUNT;"
+curl -sk -X POST "$BASE/api/set_new_password" -H 'Content-Type: application/json' \
+  -d '{"user_id":"myuser_auto_Phone","reset_token":"<トークン>",
+       "new_password_sha256":"<64桁>","locale_name":"ja"}'
+```
+
+`$BASE` はその端末の gkill（例 `https://127.0.0.1:9999`）です。
+**応答が HTTP 200 でも `errors` が入っていることがあります。** 必ず中身を見てください。
+また **ログインは IP ごとに 15 分で 10 回まで**（成功も数えられます）なので、
+失敗しても続けて叩き直さないでください。
 
 ### 2. 閲覧用の設定を追加する
 
@@ -134,8 +166,8 @@ gkill_server idf (gkill_server dvnf get AutoScreenshot)
 
 `chrome://extensions` を開き、デベロッパーモードで `src/chrome_ext` を読み込みます。
 
-オプション画面で受け口の URL と共有トークンを設定します。
-トークンは `autolog collect` の初回起動時に作られ、
+オプション画面で Chrome の受け口（`autolog collect` が開く HTTP サーバ）の URL と
+共有トークンを設定します。トークンは `autolog collect` の初回起動時に作られ、
 `$AUTOLOG_HOME/ingest_token.txt` に保存されています。
 
 ## Android の導入
@@ -285,6 +317,8 @@ autolog が次に書き出したときに上書きされます。
 autolog import --dry-run --until-now
 ```
 
+`--dry-run` は gkill を呼ばないので、この確認だけならサーバは動いていなくても
+構いません（書き込む予定の内容が出ます）。実際に取り込むときは、
 その端末の `gkill_server` が動いている必要があります。
 
 普段は次の2行を1つのスクリプトにして、定期実行から呼びます。
