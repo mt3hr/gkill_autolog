@@ -57,12 +57,58 @@ npm run verify_release_artifacts   # npm run release なら最後に自動で走
 ### Android アプリ
 
 ```powershell
-cd src\android
-.\gradlew.bat --% assembleDebug -PversionName=1.0.0 -PversionCode=10000
+npm run build_android_apk
 ```
 
-PowerShell からハイフンを含む値を渡すときは `--%` が要ります。
-付けないと PowerShell が引数として解釈します。
+`release/android_apk/gkill_autolog.apk` ができます。バージョンは
+`package.json` の `version` から決まります。
+
+**release ビルドなので、先に署名鍵の用意が要ります**（次項）。
+手で叩く場合は次のとおりです。PowerShell からハイフンを含む値を渡すときは
+`--%` が要ります。付けないと PowerShell が引数として解釈します。
+
+```powershell
+cd src\android
+.\gradlew.bat --% assembleRelease -PversionName=1.0.0 -PversionCode=10000
+```
+
+#### 署名鍵を用意する
+
+debug ビルドは配りません。`debuggable` になり、`adb` を持つ人が
+`run-as` でアプリ内の収集済みログを読めてしまいます。また debug の署名鍵は
+機械ごとに違うので、別の機械で組み直すと署名不一致で上書きできず、
+アンインストール（＝未書き出しの記録の喪失）を強いられます。
+
+鍵は**リポジトリの外**に作ります。
+
+```powershell
+keytool -genkeypair -v `
+    -keystore $env:USERPROFILE\.gkill_autolog\android_release.keystore `
+    -alias gkill_autolog -keyalg RSA -keysize 2048 -validity 10950
+```
+
+場所とパスワードは `~/.gradle/gradle.properties`（リポジトリ外・未追跡）に書きます。
+同名の環境変数（`GKILL_AUTOLOG_KEYSTORE_FILE` など）でも渡せます。
+
+```properties
+gkillAutologKeystoreFile=C:/Users/<自分>/.gkill_autolog/android_release.keystore
+gkillAutologKeystorePassword=<ストアのパスワード>
+gkillAutologKeyAlias=gkill_autolog
+gkillAutologKeyPassword=<鍵のパスワード>
+```
+
+設定が無いまま release を組もうとすると、理由を示してその場で止まります
+（署名なしの APK が黙って出来上がると、気づくのが配る直前になるため）。
+
+**この鍵は無くさないでください。** 失うと、以後の版を既存の端末へ
+上書きインストールできなくなります。
+
+### Android アプリのテスト
+
+自動テストはありません。`npm test` にも含めていません
+（テストが1つも無いまま `gradlew test` を回すと、空で合格して
+「テストされている」ように見えてしまうためです）。
+実機での確認手順は [testing-guide.md](testing-guide.md) にあります。
 
 ## テスト
 
