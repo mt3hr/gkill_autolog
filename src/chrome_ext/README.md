@@ -128,6 +128,16 @@ MV3 の Service Worker はいつでも停止されるため、状態とキュー
 npm run test_chrome_ext
 ```
 
-Node の標準テストランナーで `background.test.mjs` を動かす。
+Node の標準テストランナーで `src/chrome_ext/*.test.mjs` を動かす。
+
+| ファイル | 何を検証しているか |
+| --- | --- |
+| `background.test.mjs` | Service Worker。キューの直列化、閲覧区間のライフサイクル (タブ切替・同一URLの再表示・タイトルの後着)、確定済み再生の墓標と差分化 |
+| `content_media.test.mjs` | 計測。一時停止・シーク・広告・ループ/短尺/消音の除外、コンテンツ切替、途中報告 |
+| `content_media_insecure.test.mjs` | 保護されていないページでの取り扱い |
+
 chrome API は `chrome.storage` の非同期性だけを再現したスタブで、
 並行イベントでキューが消えないことなどを検証している。
+`content_media.js` は読み込み時に `location.hostname` を見て挙動を決めるため、
+ホスト依存の分岐はクエリ付きの再 import (`./content_media.js?host=generic`) か
+別ファイルで検証する。

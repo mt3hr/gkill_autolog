@@ -4,11 +4,16 @@
 
 | 対象 | 必要なもの |
 | --- | --- |
+| ビルドとテストの実行 | Node.js 20 以上 (npm)。ビルドは npm スクリプト経由で行う |
 | Go の CLI | Go 1.26 以上 |
 | Android アプリ | JDK 17、Android SDK (compileSdk 37。minSdk 26 / targetSdk 36) |
-| Chrome 拡張 | なし（そのまま読み込める） |
+| Chrome 拡張 | なし（そのまま読み込める。テストは Node の標準ランナー） |
 | スクリプト | Windows PowerShell 5.1 または PowerShell 7 |
 | 端末別ユーザーの作成 | PATH に通った `sqlite3` |
+
+**最初に一度 `npm install` を実行してください。** ビルドの npm スクリプトは
+`cross-env` などの devDependencies を使うため、これが無いと最初の
+`npm run build` が失敗します。
 
 CGO は使いません。SQLite は純 Go の実装なので、C コンパイラは要りません。
 
@@ -36,12 +41,18 @@ npm run build_android_arm64
 ```
 
 `release/android_arm64/autolog` ができます。
-出力が本当に ARM64 の ELF かを `verify_release_artifacts.mjs` が確認します。
 端末への入れ方は [operations-guide.md](operations-guide.md) を参照してください。
 
 **`CGO_ENABLED=0` が必要です。** Windows 上で NDK の clang を指定すると、
 Go がネイティブのコンパイラへ切り替わり、中身が Windows のバイナリ (MZ) のまま
 出来上がることがあります。
+
+出力が本当に ARM64 の ELF かは `verify_release_artifacts.mjs` が確認しますが、
+**単発のビルドでは走りません。** 端末へ配る前に確認してください。
+
+```powershell
+npm run verify_release_artifacts   # npm run release なら最後に自動で走る
+```
 
 ### Android アプリ
 
@@ -62,13 +73,23 @@ go test ./...
 
 `internal/normalize` のテストが最も重要です。閾値・結合・持ち越しの境界値を検証しています。
 
+Chrome 拡張のテストは Node の標準ランナーで回します。
+`npm test` は Go と Chrome 拡張の両方を回します。
+
+```powershell
+npm run test_chrome_ext
+```
+
 Android 向けにビルドが通ることも確認してください。
 
 ```powershell
-cd src\autolog
-$env:CGO_ENABLED='0'; $env:GOOS='android'; $env:GOARCH='arm64'
-go vet ./...
+npm run vet_android
 ```
+
+**環境変数を手で設定して `go vet` を叩かないでください。**
+`$env:GOOS='android'` はそのセッションに残るので、以後の `go test` や
+`go build` が Android 向けになって通らなくなります。上の npm スクリプトは
+`cross-env` で子プロセスにだけ渡すため、この事故が起きません。
 
 ## コードの書き方
 
@@ -82,8 +103,14 @@ gkill 本体に合わせています。
 
 ### 端末名や利用者名をコードに書かない
 
-設定で決めます。既定値も置きません。
+設定で決めます。特定の環境の名前は、既定値としても置きません
+（ホスト名・機種名から導くような環境非依存の既定は構いません）。
 コードに書くと、他の人がそのまま使えなくなります。
+
+### エラーメッセージの言語
+
+利用者が直接目にする経路（`config`・`cmd`・`gkillclient`・`inbox`）は日本語です。
+内部診断だけの低層（`winapi` や `rawlog` の SQL 周辺など）は英語のままにしています。
 
 ### PowerShell スクリプト
 

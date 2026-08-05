@@ -32,21 +32,23 @@
 | `collect` | Windows での収集 |
 | `winapi` | Win32 API のラッパ |
 | `shot` | スクリーンショットの撮影と WebP 変換 |
-| `ingest` | Chrome 拡張からの受け口 (HTTP) |
-| `inbox` | Android の収集アプリが置いた JSONL の取り込み |
+| `ingest` | Chrome の受け口 (HTTP)。拡張から閲覧・再生を受け取る |
+| `inbox` | Android の受け口。収集アプリが置いた JSONL の取り込み |
 | `normalize` | 生ログ → 提案。**中核** |
 | `gkillclient` | gkill の HTTP API クライアント |
 | `ledger` | 書き込み済み台帳 |
 | `config` | 設定とディレクトリの解決 |
+| `proclock` | 多重起動を防ぐファイルロック (collect / import) |
 
 ## ビルドとテスト
 
 ```powershell
-npm run build                # この機械向け
+npm run build                # Windows (amd64) 向け
 npm run build_android_arm64  # Android (arm64) 向け
 
+npm test                     # Go と Chrome 拡張のテスト
 cd autolog
-go test ./...
+go test ./...                # Go のテストだけ
 ```
 
 詳しくは [dev-setup.md](../documents/reverse/dev-setup.md) を参照してください。

@@ -44,8 +44,8 @@ autolog/
 │   ├── collect/          Windows での収集（ウィンドウ・セッション・Wi-Fi 等）
 │   ├── winapi/           Win32 API のラッパ
 │   ├── shot/             スクリーンショットの撮影と WebP 変換
-│   ├── ingest/           Chrome 拡張からの受け口 (HTTP)
-│   ├── inbox/            Android の収集アプリが置いた JSONL の取り込み
+│   ├── ingest/           Chrome の受け口 (HTTP)。拡張から閲覧・再生を受け取る
+│   ├── inbox/            Android の受け口。収集アプリが置いた JSONL の取り込み
 │   ├── normalize/        生ログ → 提案。ルール処理の中核
 │   ├── gkillclient/      gkill の HTTP API クライアント。書き込みの制御もここ
 │   ├── ledger/           書き込み済み台帳
@@ -87,16 +87,22 @@ gkill への取り込みはしません。
 
 ```
 android/app/src/main/java/com/mt3hr/gkill_autolog/
+├── AutologApp.kt          Application。落ちたときの記録を crash.log に残す
 ├── AutologService.kt      常駐して各収集を回す
 ├── MainActivity.kt        設定と権限付与の画面
 ├── BootReceiver.kt        再起動後の再開
+├── ExportReceiver.kt      外から書き出しをさせる受け口（取り込みの直前に叩かれる）
 ├── Config.kt              設定。端末名は config.env を優先する
 ├── SharedStorage.kt       /sdcard/gkill_autolog の場所
 ├── collect/               各収集（アプリ利用・通知・メディア・システム・撮影・位置情報）
 ├── export/                JSONL と GPX の書き出し
 ├── model/Event.kt         生ログの1件
-└── store/                 書き出すまでの一時保管（生ログ・位置情報）
+└── store/                 書き出すまでの一時保管（イベント・位置情報）
 ```
+
+画面まわりのリソースは `app/src/main/res/` にあります
+（`layout/activity_main.xml`、`values/strings.xml`・`colors.xml`、
+ユーザー補助サービスの宣言 `xml/accessibility_service_config.xml`、アイコン）。
 
 ## src/chrome_ext — Chrome 拡張
 
@@ -104,12 +110,19 @@ Manifest V3。閲覧したページと、動画・音楽の実再生時間を送
 
 ```
 chrome_ext/
-├── manifest.json    権限と読み込むファイル
-├── background.js    Service Worker。閲覧区間の管理と送信
-├── content_media.js 各ページで再生を数える
-├── options.html     送信先と共有トークンの設定画面
-└── options.js
+├── manifest.json         権限と読み込むファイル
+├── background.js         Service Worker。閲覧区間の管理と送信
+├── content_media.js      各ページで再生を数える
+├── options.html          送信先と共有トークンの設定画面
+├── options.js
+├── README.md             拡張の設計と落とし穴
+├── background.test.mjs   Service Worker のテスト
+├── content_media.test.mjs            計測のテスト
+└── content_media_insecure.test.mjs   保護されていないページでの計測のテスト
 ```
+
+テストは Node の標準ランナーで動かします (`npm run test_chrome_ext`)。
+chrome API は `chrome.storage` の非同期性を再現したスタブに差し替えます。
 
 Service Worker は随時停止するので、イベントはいったん `chrome.storage` へ積み、
 `chrome.alarms` でまとめて送ります。送れた分だけ消します。

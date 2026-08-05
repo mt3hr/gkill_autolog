@@ -78,7 +78,7 @@ gkill 本体の用語は [gkill の用語集](https://github.com/mt3hr/gkill/blo
 | `autolog_device` | TimeIs | 端末そのものの利用（ロック解除〜ロック） |
 | `autolog_window` | TimeIs | 前面ウィンドウ（Windows）／前面アプリ（Android） |
 | `autolog_browser` | URLog | ブラウザでのページ閲覧 |
-| `autolog_media` | TimeIs | 動画・音楽の再生（常に作る） |
+| `autolog_media` | TimeIs | 動画・音楽の再生（タイトルを取得できたものは常に作る） |
 | `autolog_media` | URLog | 動画・音楽の再生（URL が分かるときだけ追加で作る） |
 | `autolog_wifi` | TimeIs | Wi-Fi の接続 |
 | `autolog_bluetooth` | TimeIs | Bluetooth 機器の接続 |
@@ -121,11 +121,15 @@ gkill の追加 API は書き込み先リポジトリを指定できないため
 
 生ログ (raw.db) には入れない。GPX が最終形で、`autolog import` は関与しない。
 
-### 受け口 (inbox)
+### 受け口
 
-Android で収集アプリと `autolog` が生ログを受け渡す場所 (`/sdcard/gkill_autolog/events/`)。
+生ログが外から入ってくる口。2つあり、区別して呼びます。
 
-追記専用の JSONL を置きます。SQLite は置きません（理由は design-philosophy）。
+- **Android の受け口 (inbox)**: 収集アプリと `autolog` が生ログを受け渡す場所
+  (`/sdcard/gkill_autolog/events/`)。追記専用の JSONL を置きます。
+  SQLite は置きません（理由は design-philosophy）
+- **Chrome の受け口 (ingest)**: `autolog collect` が開く HTTP サーバ
+  (`POST /ingest`、127.0.0.1 のみ)。Chrome 拡張が閲覧・再生を送ってきます
 
 ### 除外リスト (deny list)
 
@@ -133,8 +137,9 @@ URLog にしない URL のパターンを書くファイル (`url_denylist.txt`)
 Kmemo にしない通知のパターンを書くファイル (`notification_denylist.txt`)。
 通知側はパッケージ名・アプリ名・通知チャンネルIDを照合します。
 
-何を残すかの判断はすべてこのファイルで決まります。
-判断を人にも AI にも都度求めません。
+**利用者が調整できる取捨はこの2枚だけ**です。判断を人にも AI にも都度求めません。
+要件で決まっている固定の取捨（ブラウザ内部ページや YouTube 系の閲覧の除外、
+常駐通知の除外、30秒・1分などの閾値）は normalize のコードにあります。
 
 ## Kyou の種類との対応
 

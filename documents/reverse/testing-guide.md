@@ -7,23 +7,34 @@ cd src\autolog
 go test ./...
 ```
 
-Android のテストも含めて回すなら、リポジトリの直下で次を実行します。
+Go と Chrome 拡張のテストをまとめて回すなら、リポジトリの直下で次を実行します。
 
 ```powershell
 npm test
 ```
+
+Android アプリには自動テストがありません（`npm test` にも含めていません）。
+実機での確認は後述の「実機での確認」で行います。
 
 | パッケージ | 何を検証しているか |
 | --- | --- |
 | `normalize` | **最重要。** 閾値・結合・除外の境界値と、バッチをまたぐ持ち越し・重複排除 |
 | `rawlog` | 追記の冪等性、時刻の保存形式と辞書順、端末名の書式、持ち越しの往復 |
 | `gkillclient` | 応答の `errors` の扱い、セッション切れの再試行、失敗の記憶 |
-| `inbox` | JSONL の取り込み、書きかけの無視、壊れた行の扱い |
-| `ingest` | 受け口の認証と冪等性、CORS |
-| `ledger` | 書き込み済みの記録 |
+| `inbox` | Android の受け口。JSONL の取り込み、書きかけの無視、壊れた行の扱い、行長の上限 |
+| `ingest` | Chrome の受け口。認証と冪等性、CORS、本文の上限、経路の振り分け |
+| `ledger` | 書き込み済みの記録と、元イベントの包含判定 |
 | `config` | 設定の優先順位、BOM 付きファイルの読み込み、撮影間隔の丸め |
 | `shot` | 撮影の区切りの計算と、ファイル名が衝突しないこと |
+| `collect` | 停止時の書き出しがロック待ちで期限切れしないこと、接続状態の取り直し（Windows のみ） |
+| `proclock` | 多重起動を防ぐファイルロックの取得と解放 |
 | `winapi` | 構造体の大きさとオフセットが Win32 の定義と合っていること（Windows のみ） |
+
+Chrome 拡張のテストは Node の標準ランナーで別に回します。
+
+```powershell
+npm run test_chrome_ext
+```
 
 ### normalize のテストが要になる理由
 
@@ -63,19 +74,42 @@ go build -o <作業用ディレクトリ>\gkill_server_verify.exe .\gkill\main\g
 
 管理者アカウントは初回起動で作られますが、**既定のリポジトリは作られません。**
 
+`curl` は使いません。Windows PowerShell 5.1 では `curl` が `Invoke-WebRequest` の
+別名で、`-X` や `-d` が通らないためです。リポジトリの共通処理を読み込んで叩きます
+（`Invoke-GkillApi` は本文を UTF-8 のバイト列で送るので 5.1 でも化けません）。
+
 ```powershell
-# reset_token を取り出す
-curl -i http://127.0.0.1:19998/
-#   → Location: /regist_first_account?reset_token=<トークン>
+. .\src\scripts\_gkill_api.ps1
+
+# reset_token を取り出す（初回起動時にアカウントDBへ入っている）
+sqlite3 <作業用ディレクトリ>\gkill_verify\configs\account.db `
+    "select USER_ID, PASSWORD_RESET_TOKEN from ACCOUNT;"
 
 # パスワードを設定する
-curl -X POST http://127.0.0.1:19998/api/set_new_password `
-     -H 'Content-Type: application/json' `
-     -d '{"user_id":"admin","reset_token":"<トークン>","new_password_sha256":"<64桁>","locale_name":"ja"}'
+Invoke-GkillApi 'http://127.0.0.1:19998' '/api/set_new_password' @{
+    user_id = 'admin'; reset_token = '<トークン>'
+    new_password_sha256 = '<64桁>'; locale_name = 'ja'
+}
 ```
 
 端末別ユーザーは `/api/add_user` に `do_initialize: true` で作ります。
 このとき既定のリポジトリも作られます。
+
+```powershell
+$admin = Invoke-GkillApi 'http://127.0.0.1:19998' '/api/login' @{
+    user_id = 'admin'; password_sha256 = '<64桁>'; locale_name = 'ja'
+}
+Invoke-GkillApi 'http://127.0.0.1:19998' '/api/add_user' @{
+    session_id = $admin.session_id; do_initialize = $true; locale_name = 'ja'
+    account_info = @{ user_id = 'myuser_auto_Laptop'; is_admin = $false; is_enable = $true }
+}
+```
+
+作ったユーザーのパスワードも、`account.db` の `PASSWORD_RESET_TOKEN` を使って
+同じ `/api/set_new_password` で設定します。
+
+**応答の `errors` を必ず見てください。** gkill は HTTP 200 でも失敗を返します
+（`Get-GkillError $response` で1行にまとまります）。
 
 ### 取り込みの検証
 
@@ -110,8 +144,13 @@ sqlite3 <gkill_verify>\datas\<ユーザー>\TimeIs.db `
 
 ```powershell
 Get-Process gkill_server_verify -ErrorAction SilentlyContinue | Stop-Process -Force
-Get-NetTCPConnection -State Listen -LocalPort 9999 | Select-Object OwningProcess
+Get-NetTCPConnection -State Listen -LocalPort 9999 -ErrorAction SilentlyContinue |
+    Select-Object OwningProcess
 ```
+
+`-ErrorAction SilentlyContinue` を付けるのは、本番の gkill を止めているときに
+「待ち受けが無い」だけで赤いエラーが出て、失敗と紛らわしいためです。
+何も出なければ本番のポートは空いています。
 
 ## PowerShell スクリプトの検証
 

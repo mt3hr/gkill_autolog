@@ -55,8 +55,9 @@ gkill 本体と同じく、実装は `src/` の下、資料は `documents/revers
                                                ledger.db（書き込み済み）
 ```
 
-スクリーンショットだけは別経路。撮って置くだけで、gkill へ入れるのは
-同期スクリプトと `gkill_server idf` の役目。
+スクリーンショットと GPX（位置情報）は別経路。raw.db と import を通らず、
+撮って（書いて）置くだけ。gkill へ入れるのは同期スクリプトと
+`gkill_server idf` / gpslog rep の役目。
 
 ### サブコマンド
 
@@ -65,8 +66,9 @@ gkill 本体と同じく、実装は `src/` の下、資料は `documents/revers
 ### パッケージ
 
 `rawlog`（生ログ）/ `collect`（Windows 収集）/ `winapi` / `shot` /
-`ingest`（Chrome の受け口）/ `inbox`（Android からの受け渡し）/
-`normalize`（**中核**）/ `gkillclient` / `ledger` / `config`
+`ingest`（Chrome の受け口）/ `inbox`（Android の受け口）/
+`normalize`（**中核**）/ `gkillclient` / `ledger` / `config` /
+`proclock`（多重起動防止のファイルロック）
 
 ## 設計上の約束
 
@@ -78,7 +80,10 @@ gkill 本体と同じく、実装は `src/` の下、資料は `documents/revers
   たとえばブラウザ内部ページや YouTube 系の閲覧の除外は normalize のコードにある）
 - **生ログは消さない。** 追記専用。`(端末, event_id)` で一意なので再取り込みが安全
 - **失敗は記録せず次回やり直す。** 台帳には成功した分だけ載せる
-- **端末名・利用者名をコードに書かない。** 既定値も置かない。設定で決める
+- **端末名・利用者名をコードに書かない。** 特定環境の決め打ちを置かない。設定で決める
+  （既定値は「ホスト名・機種名から導く」のような環境非依存の導出だけ）
+- **エラーメッセージは利用者に見える経路（config・cmd・gkillclient・inbox）は日本語。**
+  内部診断（winapi・rawlog の低層など）は英語のままでよい
 
 ## 踏みやすい落とし穴
 
