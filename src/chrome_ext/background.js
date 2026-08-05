@@ -8,6 +8,8 @@
 // MV3 の Service Worker はいつでも停止されるため、状態とキューは
 // すべて chrome.storage へ置き、メモリ上には持たない。
 
+import { DEFAULT_ENDPOINT, KEY_QUEUE, KEY_SETTINGS } from "./shared.js";
+
 const ALARM_NAME = "gkill-autolog-tick";
 
 // TICK_MINUTES は chrome.alarms の最小周期。これより短くはできない。
@@ -27,8 +29,6 @@ const QUEUE_LIMIT = 5000;
 const FLUSH_CHUNK = 200;
 
 const KEY_VIEW = "currentView";
-const KEY_QUEUE = "queue";
-const KEY_SETTINGS = "settings";
 const KEY_PENDING_PLAYS = "pendingPlays";
 const KEY_FINALIZED_PLAYS = "finalizedPlays";
 
@@ -67,7 +67,7 @@ async function loadSettings() {
   const stored = await chrome.storage.local.get(KEY_SETTINGS);
   const settings = stored[KEY_SETTINGS] || {};
   return {
-    endpoint: settings.endpoint || "http://127.0.0.1:19921/ingest",
+    endpoint: settings.endpoint || DEFAULT_ENDPOINT,
     token: settings.token || "",
   };
 }
@@ -376,7 +376,14 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (!message || message.type !== "media_progress") {
     return false;
   }
-  withState(() => recordProgress(message)).then(() => sendResponse({ received: true }));
+  // 失敗しても必ず応答する。返さないままにすると、content script 側の
+  // sendMessage が「応答の前に接続が閉じた」で終わり、原因が分からなくなる。
+  withState(() => recordProgress(message))
+    .then(() => sendResponse({ received: true }))
+    .catch((error) => {
+      console.error("gkill autolog: 再生の記録に失敗した", error);
+      sendResponse({ received: false });
+    });
   return true;
 });
 

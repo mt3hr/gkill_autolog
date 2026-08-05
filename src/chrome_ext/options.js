@@ -1,5 +1,4 @@
-const KEY_SETTINGS = "settings";
-const KEY_QUEUE = "queue";
+import { DEFAULT_ENDPOINT, KEY_QUEUE, KEY_SETTINGS } from "./shared.js";
 
 const endpointInput = document.getElementById("endpoint");
 const tokenInput = document.getElementById("token");
@@ -9,7 +8,7 @@ const queueCount = document.getElementById("queue-count");
 async function load() {
   const stored = await chrome.storage.local.get([KEY_SETTINGS, KEY_QUEUE]);
   const settings = stored[KEY_SETTINGS] || {};
-  endpointInput.value = settings.endpoint || "http://127.0.0.1:19921/ingest";
+  endpointInput.value = settings.endpoint || DEFAULT_ENDPOINT;
   tokenInput.value = settings.token || "";
   queueCount.textContent = String((stored[KEY_QUEUE] || []).length);
 }
