@@ -11,12 +11,17 @@
 
 [CmdletBinding()]
 param(
-    [string]$BaseUrl = 'https://127.0.0.1:9999',
+    # 接続先。省略時は他のスクリプトと同じく 実環境変数 → autolog.env の順で
+    # GKILL_BASE_URL を見る。既定値をここに置くと、別ポートで運用している構成で
+    # 確認スクリプトと違う相手へ管理者ログインを試みることになる。
+    [string]$BaseUrl,
     # gkill の管理者アカウント名。ユーザーの追加には管理者が要る。
     # 既定値は置かない（利用者名をコードに書かない）。
     [Parameter(Mandatory)][string]$AdminUser,
     [Parameter(Mandatory)][string]$UserPrefix,
     [Parameter(Mandatory)][string[]]$Devices,
+    # gkill のホーム。アカウントDBの場所を決めるのに使う。
+    [string]$GkillHome,
     # 何をするかだけ表示して、実際には作らない。
     [switch]$WhatIfOnly,
     # 証明書の検証を省く。GKILL_INSECURE (環境変数か autolog.env) でも指定できる。
@@ -33,13 +38,21 @@ $envFile = Join-Path $PSScriptRoot 'autolog.env'
 $settings = if (Test-Path $envFile) { Read-GkillEnvFile $envFile } else { @{} }
 if ($Insecure -or (Test-GkillInsecure $settings)) { Enable-GkillInsecureTls }
 
+# 既定値は param ではなく本体で解決する。5.1 は -File 起動のとき
+# param ブロック内の $PSScriptRoot が空になる。
+if (-not $BaseUrl) { $BaseUrl = Get-GkillSetting $settings 'GKILL_BASE_URL' }
+if (-not $BaseUrl) { $BaseUrl = 'https://127.0.0.1:9999' }
+if (-not $GkillHome) { $GkillHome = Join-Path $env:USERPROFILE 'gkill' }
+
 # ---------------------------------------------------------------- 事前確認
 
 Write-Host '=== 事前確認 ==='
 Write-Host ("  PowerShell  : {0}" -f $PSVersionTable.PSVersion)
 
-$accountDb = Join-Path $env:USERPROFILE 'gkill\configs\account.db'
-if (-not (Test-Path $accountDb)) { throw "アカウントDBが見つかりません: $accountDb" }
+$accountDb = Join-Path $GkillHome 'configs\account.db'
+if (-not (Test-Path $accountDb)) {
+    throw "アカウントDBが見つかりません: $accountDb (場所が違う場合は -GkillHome で渡してください)"
+}
 Write-Host '  アカウントDB: あり'
 
 if (-not (Get-Command sqlite3.exe -ErrorAction SilentlyContinue)) {
@@ -156,7 +169,7 @@ foreach ($item in $plan) {
         session_id = $check.session_id; locale_name = 'ja'
     }
     Write-Host "  ログイン確認 OK / rep $($reps.rep_names.Count) 個"
-    Write-Host "  書き込み先: $env:USERPROFILE\gkill\datas\$user\"
+    Write-Host "  書き込み先: $(Join-Path $GkillHome "datas\$user")"
 }
 
 # ---------------------------------------------------------------- 案内

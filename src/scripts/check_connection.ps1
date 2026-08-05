@@ -91,8 +91,11 @@ if (-not $devices) {
 
 # ログインは IP ごとに15分で10回まで。成功した試行も数えられるので、
 # 端末が多い構成ではこの確認だけで上限に近づく。先に消費量を知らせる。
-if ($devices.Count -ge 8) {
-    Write-Host "注意: この確認はログインを $($devices.Count) 回使います (gkill の上限は IP ごとに15分で10回)。"
+# 単一ユーザー構成 (GKILL_USER あり) では、上で1回使っているぶんも数える。
+$loginCount = $devices.Count
+if ($user) { $loginCount++ }
+if ($loginCount -ge 8) {
+    Write-Host "注意: この確認はログインを $loginCount 回使います (gkill の上限は IP ごとに15分で10回)。"
     Write-Host '      直後に取り込みを動かす予定があるなら、AUTOLOG_ALLOWED_DEVICES を絞ってください。'
     Write-Host ''
 }

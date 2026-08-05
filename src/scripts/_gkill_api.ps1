@@ -17,11 +17,6 @@ function Get-AutologRoot([string]$ScriptRoot) {
     return (Split-Path (Split-Path $ScriptRoot -Parent) -Parent)
 }
 
-# Get-AutologModuleDir は Go モジュール (go.mod) のあるディレクトリを返す。
-function Get-AutologModuleDir([string]$ScriptRoot) {
-    return (Join-Path (Get-AutologRoot $ScriptRoot) 'src/autolog')
-}
-
 # Enable-GkillInsecureTls は自己署名証明書の gkill へ繋げるようにする。
 # 5.1 ではプロセス全体の設定になるため、スクリプトの実行中だけの影響で済むよう
 # 呼び出しは各スクリプトの冒頭1回にとどめる。

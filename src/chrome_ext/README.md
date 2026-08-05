@@ -122,6 +122,12 @@ MV3 の Service Worker はいつでも停止されるため、状態とキュー
   状態を触る関数はロックを取らず、入口（イベントリスナ）だけで取る決まり。
   例外は `removeFromQueue` で、ロックの外で走る送信 (`flush`) から呼ばれるため自分で取る。
 
+**storage のキーと既定の送信先は `shared.js` に置く。**
+Service Worker と設定画面の両方で使うので、片方だけ直すと
+「設定画面で保存したのに送られない」という気づきにくい壊れ方をする。
+Service Worker は `"type": "module"`、設定画面は
+`<script type="module">` で読み込むので、どちらからも import できる。
+
 ## テスト
 
 ```

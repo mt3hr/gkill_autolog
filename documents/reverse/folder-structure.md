@@ -113,6 +113,7 @@ chrome_ext/
 ├── manifest.json         権限と読み込むファイル
 ├── background.js         Service Worker。閲覧区間の管理と送信
 ├── content_media.js      各ページで再生を数える
+├── shared.js             Service Worker と設定画面が共有する定数
 ├── options.html          送信先と共有トークンの設定画面
 ├── options.js
 ├── README.md             拡張の設計と落とし穴
