@@ -66,9 +66,18 @@ gpslog/
 # ---------------------------------------------------------------- エディタ・OS
 .idea/
 .vscode/
-.claude/
+# .claude 直下は無視するが、リポジトリで共有する規約スキルだけ追跡する。
+# （`.claude/` のディレクトリ除外形のままではネガティブパターンが効かない。
+#   git はネガティブパターンで親ディレクトリの除外を打ち消せないため、skills が
+#   CI や新しいクローンに存在せず、verify_docs の checkSkills が
+#   「1つも見つからない」で落ちる。settings.local.json は無視のまま）
+/.claude/*
+!/.claude/skills/
 .DS_Store
 *.swp
 *~
 # Cygwin の bash が落ちたときに残すメモリダンプ。
 *.stackdump
+
+# 個人情報検査のローカル NG 語リスト（コミットしない。checkPersonalInfo が読む）
+/verify_docs_personal_ngwords.local.txt

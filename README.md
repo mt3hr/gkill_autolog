@@ -84,6 +84,7 @@ CGO は使いません。C コンパイラは要りません。
 | [実装仕様](documents/reverse/program-spec.md) | 開発者 | パッケージ構成と処理の詳細 |
 | [導入と運用](documents/reverse/operations-guide.md) | 利用者 | 手順書 |
 | [実装の入口](src/README.md) | 開発者 | ソースの歩き方 |
+| [AGENTS.md](AGENTS.md) | AI エージェント | 規約の入口。触るパスごとの必読資料へのルーティング表 |
 
 ## ライセンス
 
