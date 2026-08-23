@@ -71,6 +71,7 @@ curl -sk -X POST "$BASE/api/set_new_password" -H 'Content-Type: application/json
 | kmemo | `$HOME/Kyou/AutoKmemo_*.db` |
 | tag | `$HOME/Kyou/AutoTag_*.db` |
 | directory | `$HOME/Kyou/AutoScreenshot_*` |
+| directory | `$HOME/Kyou/AutoAudio_*`（Android の録音を使う場合） |
 
 ## PC (Windows) の導入
 
@@ -177,6 +178,7 @@ gkill を Termux で動かしている前提です。
 ```
 収集アプリ ──→ /sdcard/gkill_autolog/events/*.jsonl ──→ autolog import ──→ その端末の gkill
            ├─→ /sdcard/gkill_autolog/screenshots/*.webp ──→ dvnf ──→ AutoScreenshot_<端末>_<日付>
+           ├─→ /sdcard/gkill_autolog/audio/*.m4a ─────────→ dvnf ──→ AutoAudio_<端末>_<日付>
            └─→ /sdcard/gkill_autolog/gpslog/YYYYMMDD.gpx ──→ dvnf ──→ GPSLogs_<端末>_<日付>
 ```
 
@@ -254,7 +256,38 @@ ls /sdcard/gkill_autolog/events/
 | ユーザー補助 | 前面アプリの把握 | Chrome 履歴の照合ができない |
 | 位置情報 | Wi-Fi の SSID、GPX | SSID が空になり、位置情報も取れない |
 | 位置情報を「常に許可」 | 画面が消えている間の GPX | 画面を消すと位置情報が途切れる |
+| マイク | 定期録音 | 音声が記録されない |
 | バッテリー最適化の対象外 | 常駐 | 収集が止まる |
+
+記録する種類は設定画面のチェックボックスで選べます。既定は
+アプリ利用・通知・再生・Wi-Fi・Bluetooth・充電が入り、
+Chrome 履歴・スクリーンショット・位置情報・音声が外れています。
+
+**端末の利用（ロック解除・画面消灯）だけは切り替えがありません。**
+取り込みがこれを使って利用の区間を組み立てるので、止めると
+アプリ利用も再生も区間として閉じられなくなります。
+
+定期的に見に行くものは、間隔も変えられます。
+
+| 見に行くもの | 既定 | 範囲 |
+| --- | --- | --- |
+| アプリ利用 | 5秒 | 5〜3600秒 |
+| 動画・音楽の再生 | 5秒 | 5〜3600秒 |
+| Chrome 履歴 | 60秒 | 5〜3600秒 |
+| スクリーンショット | 60分 | 1〜1440分 |
+| 位置情報 | 60秒 | 10〜3600秒 |
+| 音声 | 60分 | 1〜1440分 |
+| 生ログの書き出し | 60分 | 1〜1440分 |
+
+通知・Wi-Fi・Bluetooth・充電・端末の利用に間隔はありません。
+状態が変わったときに Android から届くものを受けているだけだからです。
+
+アプリ利用・Chrome 履歴・書き出しは、間隔を空けても取りこぼしません。
+変わるのは生ログに載るまでの遅れだけです。
+
+**再生の間隔だけは記録の粒度そのものです。** 再生時間は見に行った時点どうしの
+差で積み上げるので、空けるほど再生の始まりと終わりが粗くなります。
+電池のために空けるなら、そのぶん再生時間がずれることを承知で。
 
 ユーザー補助は前面に来たアプリの名前だけを見ます。画面の内容は読み取りません。
 
@@ -290,6 +323,52 @@ WorkManager が15分おき（Android の最短周期）に行います。
 
 PC 側と違い `config.env` は見ません。撮るのは収集アプリで、
 Termux の `autolog` は撮らないためです。
+
+### 音声 (Android)
+
+「音声を定期的に録る」をオンにすると、`/sdcard/gkill_autolog/audio/` へ
+`<端末名>_2026-08-23_12-00-00.m4a` の形で置きます。**マイクの許可が要ります**
+（root は要りません）。
+
+既定は60分ごとに1分で、間隔は1〜1440分、長さは1〜60分の範囲で変えられます。
+単位はスクリーンショットの撮影間隔と同じです。録音時刻は間隔で丸めるので、
+60 なら毎時00分、30 なら毎時00分と30分に録り始めます。
+
+**長さは間隔より短くなります。** 同じ長さを入れると間隔−1分まで丸めて画面へ返します。
+同じにすると、次の区切りが来た時点でまだ前の録音が終わっておらず、
+その区切りが飛びます（60分ごとに60分と入れると半分しか録れません）。
+
+**始めた直後と間隔を変えた直後は、いま入っている区切りを飛ばします。**
+その区切りは頭から録れていないためで、次の区切りの頭から録り始めます。
+12:47 に始めたものを「12:00 の録音」として置かないための決まりです。
+
+AAC のモノラル 16kHz 32kbps で、1分あたり約 240KB です。
+既定（1時間ごとに1分）なら1日あたり約 6MB になります。
+
+既定では**画面が消えている間とロック中も録ります。** スクリーンショットと違い、
+画面が消えていても記録すべき音があるためです。設定を外すと、
+端末を使っている間だけになります。
+
+**撮り逃した区切りを後から録り直すことはしません。** スクリーンショットの
+「撮り逃したら次に画面を点けたときに撮る」に当たるものは入れていません。
+後から録った音は別の時刻の音であって、その区切りの音ではないためです。
+
+無音でもファイルは残します。塞がれたマイクと静かな部屋は同じ無音になり、
+区別できないためです。録音の全体が無音だったときは
+`adb logcat -s AutologAudio` に警告が出ます。
+
+#### 端末を再起動すると、アプリを開くまで音声だけ止まります
+
+**これは Android の制約で、直せません。** マイクを使う常駐は、アプリが
+前に出ている間しか始められず、端末の再起動からの開始は禁止されています。
+位置情報の「常に許可」に当たる権限がマイクには無いためです。
+
+ほかの記録（アプリ利用・通知・Wi-Fi・Bluetooth・充電・スクリーンショット・
+位置情報）は再起動後も自動で戻ります。**音声だけが止まります。**
+
+アプリを開けば戻ります。設定画面の状態表示に
+`音声: 休止（アプリを開くと戻ります）` と出るので、そこで気づけます。
+戻っていれば `音声: 録音中（最後に録れたのは 08-23 12:00）` になります。
 
 ### 位置情報 (GPX)
 
@@ -382,17 +461,37 @@ for auto_db in TimeIs URLog Kmemo Tag; do
 done
 
 # スクリーンショット
-gkill_server dvnf move "$HOME/storage/shared/gkill_autolog/screenshots/*" AutoScreenshot
+gkill_server dvnf move "$HOME/storage/shared/gkill_autolog/screenshots/*.webp" AutoScreenshot
 gkill_server idf $(gkill_server dvnf get AutoScreenshot)
 
+# 音声
+gkill_server dvnf move "$HOME/storage/shared/gkill_autolog/audio/*.m4a" AutoAudio
+gkill_server idf $(gkill_server dvnf get AutoAudio)
+
 # 位置情報。gkill 側の rep 登録は既存の $HOME/Kyou/GPSLogs_* のままでよい。
-gkill_server dvnf copy "$HOME/storage/shared/gkill_autolog/gpslog/*" GPSLogs
+gkill_server dvnf copy "$HOME/storage/shared/gkill_autolog/gpslog/*.gpx" GPSLogs
 ```
+
+**どれも拡張子まで指定してください。** 共有ストレージへ出すときは
+いったん `<最終名>.tmp` へ書いてから名前を変えていますが、
+`*` だとその `.tmp` 自身にも当たります。dvnf の `--ignore` は
+ファイル名の完全一致（`.gkill` や `Thumbs.db` など）なので、`.tmp` は素通りします。
+
+位置情報では実際に起きました。gkill は `Contains(".gpx")` で拾うので
+`.gpx.tmp` も読みに行き、パースに失敗するとその rep の GPS ログが
+丸ごと返らなくなります。0 バイトの `.gpx.tmp` が運ばれて、そうなっていました。
+
+スクリーンショットは `move` なので、掴まれるとアプリ側の名前の変更が失敗して
+**その1枚が失われます。** 壊れた `.webp.tmp` は IDF が Kyou として登録します。
+
+`AutoAudio` を足すには、gkill 側に `$HOME/Kyou/AutoAudio_*` の
+directory リポジトリを登録しておきます（読み取り専用。上の rep の表を参照）。
+`.m4a` は gkill が音声として扱うので、Kyou に再生プレイヤーが付きます。
 
 ### root が無い端末
 
 スクリーンショットと Chrome 履歴は取れません。
-アプリ利用・通知・Wi-Fi・充電・端末利用・位置情報は取れます。
+アプリ利用・通知・Wi-Fi・充電・端末利用・位置情報・音声は取れます。
 
 ## 端末を増やすとき
 

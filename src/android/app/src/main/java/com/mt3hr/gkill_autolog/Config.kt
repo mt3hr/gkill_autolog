@@ -47,10 +47,100 @@ class Config(context: Context) {
         get() = preferences.getBoolean(KEY_COLLECTION_ENABLED, true)
         set(value) = preferences.edit().putBoolean(KEY_COLLECTION_ENABLED, value).apply()
 
+    /**
+     * 記録する種類。ここから下の6つは既定が true。
+     *
+     * 後から足した設定なので、既定を false にすると更新した時点で
+     * それまで記録できていたものが黙って止まる。
+     *
+     * **端末の利用 (ロック解除・画面消灯・収集の開始と終了) には切り替えを置かない。**
+     * 取り込み側がこれを使って利用セッションの区間を組み立てており、
+     * 止めるとアプリ利用も再生も区間として閉じられなくなる
+     * (normalize の window.go の継続中セッション、state.go の観測の切れ目)。
+     */
+    var collectAppUsage: Boolean
+        get() = preferences.getBoolean(KEY_COLLECT_APP_USAGE, true)
+        set(value) = preferences.edit().putBoolean(KEY_COLLECT_APP_USAGE, value).apply()
+
+    /** 通知を記録するかどうか。 */
+    var collectNotifications: Boolean
+        get() = preferences.getBoolean(KEY_COLLECT_NOTIFICATION, true)
+        set(value) = preferences.edit().putBoolean(KEY_COLLECT_NOTIFICATION, value).apply()
+
+    /** 動画・音楽の再生を記録するかどうか。 */
+    var collectMediaPlay: Boolean
+        get() = preferences.getBoolean(KEY_COLLECT_MEDIA_PLAY, true)
+        set(value) = preferences.edit().putBoolean(KEY_COLLECT_MEDIA_PLAY, value).apply()
+
+    /** Wi-Fi の接続を記録するかどうか。 */
+    var collectWifi: Boolean
+        get() = preferences.getBoolean(KEY_COLLECT_WIFI, true)
+        set(value) = preferences.edit().putBoolean(KEY_COLLECT_WIFI, value).apply()
+
+    /** Bluetooth の接続を記録するかどうか。 */
+    var collectBluetooth: Boolean
+        get() = preferences.getBoolean(KEY_COLLECT_BLUETOOTH, true)
+        set(value) = preferences.edit().putBoolean(KEY_COLLECT_BLUETOOTH, value).apply()
+
+    /** 充電を記録するかどうか。 */
+    var collectPower: Boolean
+        get() = preferences.getBoolean(KEY_COLLECT_POWER, true)
+        set(value) = preferences.edit().putBoolean(KEY_COLLECT_POWER, value).apply()
+
+    /**
+     * アプリ利用を読み取る間隔（秒）。
+     *
+     * 読み取るのは前回の続きから今までなので、間隔を空けても取りこぼさない。
+     * 記録される区間の内容も変わらない。変わるのは、区間が確定してから
+     * 生ログに載るまでの遅れだけ。
+     */
+    var appUsageIntervalSeconds: Int
+        get() = preferences.getInt(KEY_APP_USAGE_INTERVAL, DEFAULT_POLL_INTERVAL_SECONDS)
+        set(value) = preferences.edit()
+            .putInt(KEY_APP_USAGE_INTERVAL, clampPollInterval(value))
+            .apply()
+
+    /**
+     * 動画・音楽の再生を見に行く間隔（秒）。
+     *
+     * **これは記録の粒度そのもの。** 再生時間は見に行った時点どうしの差で
+     * 積み上げるので、間隔を空けるほど再生の始まりと終わりが粗くなる。
+     * 電池のために空けるなら、そのぶん再生時間がずれることを承知で。
+     */
+    var mediaPlayIntervalSeconds: Int
+        get() = preferences.getInt(KEY_MEDIA_PLAY_INTERVAL, DEFAULT_POLL_INTERVAL_SECONDS)
+        set(value) = preferences.edit()
+            .putInt(KEY_MEDIA_PLAY_INTERVAL, clampPollInterval(value))
+            .apply()
+
     /** Chrome の履歴を root で読むかどうか。 */
     var readChromeHistory: Boolean
         get() = preferences.getBoolean(KEY_READ_CHROME_HISTORY, false)
         set(value) = preferences.edit().putBoolean(KEY_READ_CHROME_HISTORY, value).apply()
+
+    /**
+     * Chrome の履歴を読む間隔（秒）。
+     *
+     * su の起動と履歴DBのコピーを伴う重い処理なので、既定は長めにしてある。
+     * 履歴は溜まってから読めるので、間隔を空けても取りこぼさない。
+     */
+    var chromeHistoryIntervalSeconds: Int
+        get() = preferences.getInt(KEY_CHROME_HISTORY_INTERVAL, DEFAULT_CHROME_HISTORY_INTERVAL_SECONDS)
+        set(value) = preferences.edit()
+            .putInt(KEY_CHROME_HISTORY_INTERVAL, clampPollInterval(value))
+            .apply()
+
+    /**
+     * 溜まった生ログを共有ストレージへ書き出す間隔（分）。
+     *
+     * 書き出せなかった分は端末に残って次回やり直されるので、
+     * 間隔が長くても失われない。すぐ渡したいときは「今すぐ書き出し」を使う。
+     */
+    var exportIntervalMinutes: Int
+        get() = preferences.getInt(KEY_EXPORT_INTERVAL, DEFAULT_EXPORT_INTERVAL_MINUTES)
+        set(value) = preferences.edit()
+            .putInt(KEY_EXPORT_INTERVAL, clampExportInterval(value))
+            .apply()
 
     /**
      * Chrome の履歴をどこまで読んだか（Chrome の時刻表現）。
@@ -144,6 +234,58 @@ class Config(context: Context) {
         set(value) = preferences.edit().putBoolean(KEY_HIGH_ACCURACY_MODE, value).apply()
 
     /**
+     * 定期的に音声を録るかどうか。
+     *
+     * 録った音は共有ストレージへ置くだけで、生ログには入れない。
+     * gkill へ運ぶのは同期スクリプトと gkill_server idf の役目
+     * (スクリーンショットや GPX と同じ扱い)。
+     */
+    var recordAudio: Boolean
+        get() = preferences.getBoolean(KEY_RECORD_AUDIO, false)
+        set(value) = preferences.edit().putBoolean(KEY_RECORD_AUDIO, value).apply()
+
+    /**
+     * 録音の間隔（分）。
+     *
+     * 録音時刻はこの間隔で丸める。60 なら毎時00分、30 なら毎時00分と30分。
+     * スクリーンショットの撮影間隔と同じ単位・同じ範囲にしてある。
+     */
+    var audioIntervalMinutes: Int
+        get() = preferences.getInt(KEY_AUDIO_INTERVAL, DEFAULT_AUDIO_INTERVAL_MINUTES)
+        set(value) = preferences.edit()
+            .putInt(KEY_AUDIO_INTERVAL, clampAudioIntervalMinutes(value))
+            .apply()
+
+    /**
+     * 1回の録音の長さ（分）。
+     *
+     * **間隔を超えられない。** 超えると、次の区切りが来ても前の録音が
+     * 終わっていない。ただしその判定にはもう一方の設定が要るので、
+     * ここでは単独の上下限だけを効かせる。両者の関係は
+     * [clampAudioDurationMinutes] を使って保存するときに見る。
+     */
+    var audioDurationMinutes: Int
+        get() = preferences.getInt(KEY_AUDIO_DURATION, DEFAULT_AUDIO_DURATION_MINUTES)
+        set(value) = preferences.edit()
+            .putInt(KEY_AUDIO_DURATION, value.coerceIn(MIN_AUDIO_DURATION_MINUTES, MAX_AUDIO_DURATION_MINUTES))
+            .apply()
+
+    /**
+     * 画面が消えている間とロック中も録るかどうか。既定は録る。
+     *
+     * スクリーンショットは中身の無いロック画面を撮っても仕方がないので撮らないが、
+     * 音は画面が消えていても記録すべき事実がある。
+     *
+     * なお、撮り逃した区切りをあとで録り直すことはしない。
+     * あとで録った音は別の時刻の音で、区切りの時刻を名乗らせられない。
+     */
+    var recordAudioWhileScreenOff: Boolean
+        get() = preferences.getBoolean(KEY_RECORD_AUDIO_WHILE_SCREEN_OFF, true)
+        set(value) = preferences.edit()
+            .putBoolean(KEY_RECORD_AUDIO_WHILE_SCREEN_OFF, value)
+            .apply()
+
+    /**
      * 端末名を config.env に合わせる。
      *
      * 端末名は autolog も使うので、二か所に持つと食い違う。
@@ -189,6 +331,20 @@ class Config(context: Context) {
         private const val KEY_HIGH_ACCURACY_MODE = "location_high_accuracy"
         private const val KEY_SCREENSHOT_INTERVAL = "screenshot_interval_minutes"
         private const val KEY_CAPTURE_ON_UNLOCK = "capture_on_unlock"
+        private const val KEY_COLLECT_APP_USAGE = "collect_app_usage"
+        private const val KEY_COLLECT_NOTIFICATION = "collect_notification"
+        private const val KEY_COLLECT_MEDIA_PLAY = "collect_media_play"
+        private const val KEY_COLLECT_WIFI = "collect_wifi"
+        private const val KEY_COLLECT_BLUETOOTH = "collect_bluetooth"
+        private const val KEY_COLLECT_POWER = "collect_power"
+        private const val KEY_RECORD_AUDIO = "record_audio"
+        private const val KEY_AUDIO_INTERVAL = "audio_interval_minutes"
+        private const val KEY_AUDIO_DURATION = "audio_duration_minutes"
+        private const val KEY_RECORD_AUDIO_WHILE_SCREEN_OFF = "record_audio_while_screen_off"
+        private const val KEY_APP_USAGE_INTERVAL = "app_usage_interval_seconds"
+        private const val KEY_MEDIA_PLAY_INTERVAL = "media_play_interval_seconds"
+        private const val KEY_CHROME_HISTORY_INTERVAL = "chrome_history_interval_seconds"
+        private const val KEY_EXPORT_INTERVAL = "export_interval_minutes"
 
         /** 位置情報の記録間隔の既定値と上下限（秒）。 */
         const val DEFAULT_LOCATION_INTERVAL_SECONDS = 60
@@ -216,6 +372,69 @@ class Config(context: Context) {
         /** 撮影間隔を扱える範囲へ丸める。 */
         fun clampScreenshotInterval(minutes: Int): Int =
             minutes.coerceIn(MIN_SCREENSHOT_INTERVAL_MINUTES, MAX_SCREENSHOT_INTERVAL_MINUTES)
+
+        /**
+         * 録音間隔の既定値と上下限（分）。
+         * スクリーンショットの撮影間隔と同じ単位・同じ範囲にしてある。
+         */
+        const val DEFAULT_AUDIO_INTERVAL_MINUTES = 60
+        const val MIN_AUDIO_INTERVAL_MINUTES = 1
+        const val MAX_AUDIO_INTERVAL_MINUTES = 1440
+
+        /** 録音間隔を扱える範囲へ丸める。 */
+        fun clampAudioIntervalMinutes(minutes: Int): Int =
+            minutes.coerceIn(MIN_AUDIO_INTERVAL_MINUTES, MAX_AUDIO_INTERVAL_MINUTES)
+
+        /** 1回の録音の長さの既定値と上下限（分）。 */
+        const val DEFAULT_AUDIO_DURATION_MINUTES = 1
+        const val MIN_AUDIO_DURATION_MINUTES = 1
+        const val MAX_AUDIO_DURATION_MINUTES = 60
+
+        /**
+         * 録音の長さを扱える範囲へ丸める。
+         *
+         * **間隔より短くする。** 同じ長さにすると、次の区切りが来た時点で
+         * まだ前の録音が終わっていない（開始の遅れと停止・書き出しのぶん）。
+         * その区切りは飛ぶので、60分ごとに60分と入れると半分しか録れない。
+         * 上下限だけでは弾けないので、間隔を渡してもらってここで抑える。
+         */
+        fun clampAudioDurationMinutes(minutes: Int, intervalMinutes: Int): Int {
+            val interval = clampAudioIntervalMinutes(intervalMinutes)
+            val limit = minOf(
+                MAX_AUDIO_DURATION_MINUTES,
+                // 間隔が1分のときだけは、これ以上短くできないので同じ長さを許す。
+                maxOf(MIN_AUDIO_DURATION_MINUTES, interval - 1),
+            )
+            return minutes.coerceIn(MIN_AUDIO_DURATION_MINUTES, limit)
+        }
+
+        /**
+         * 見に行く間隔の上下限（秒）。
+         *
+         * 下限は収集ループの周期（5秒）。これより短くしても回数は増えない。
+         * アプリ利用・再生・Chrome 履歴で共通に使う。
+         */
+        const val MIN_POLL_INTERVAL_SECONDS = 5
+        const val MAX_POLL_INTERVAL_SECONDS = 3600
+
+        /** アプリ利用と再生を見に行く間隔の既定値（秒）。収集ループの周期と同じ。 */
+        const val DEFAULT_POLL_INTERVAL_SECONDS = 5
+
+        /** Chrome の履歴を読む間隔の既定値（秒）。重い処理なので長めにしてある。 */
+        const val DEFAULT_CHROME_HISTORY_INTERVAL_SECONDS = 60
+
+        /** 見に行く間隔を扱える範囲へ丸める。 */
+        fun clampPollInterval(seconds: Int): Int =
+            seconds.coerceIn(MIN_POLL_INTERVAL_SECONDS, MAX_POLL_INTERVAL_SECONDS)
+
+        /** 書き出しの間隔の既定値と上下限（分）。 */
+        const val DEFAULT_EXPORT_INTERVAL_MINUTES = 60
+        const val MIN_EXPORT_INTERVAL_MINUTES = 1
+        const val MAX_EXPORT_INTERVAL_MINUTES = 1440
+
+        /** 書き出しの間隔を扱える範囲へ丸める。 */
+        fun clampExportInterval(minutes: Int): Int =
+            minutes.coerceIn(MIN_EXPORT_INTERVAL_MINUTES, MAX_EXPORT_INTERVAL_MINUTES)
 
         /** config.env 側のキー。autolog の AUTOLOG_DEVICE と同じもの。 */
         private const val KEY_CONFIG_DEVICE = "AUTOLOG_DEVICE"

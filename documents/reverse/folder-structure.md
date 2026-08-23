@@ -203,6 +203,7 @@ Android では共有ストレージも使います。
 /sdcard/gkill_autolog/
 ├── config.env                設定（収集アプリと autolog の両方が読む）
 ├── crash.log                 収集アプリが落ちたときの記録。設定画面にも末尾が出る
+├── audio/                    録った音声 (.m4a)。dvnf が AutoAudio へ運ぶ
 ├── events/                   収集アプリが置く JSONL。autolog が読んで消す
 ├── gpslog/                   日別の GPX。dvnf が GPSLogs へ運ぶ
 └── screenshots/              撮影した画像の置き場

@@ -182,12 +182,33 @@ Chrome 拡張が届いているかは `browser_view` と `media_play` の件数�
 # 生ログが渡っているか
 ls /sdcard/gkill_autolog/events/
 
+# 録音が置かれているか (.m4a.tmp が残っていないことも見る)
+ls -l /sdcard/gkill_autolog/audio/
+
 # 取り込まれているか
 ls -la ~/gkill/datas/<接頭辞><端末名>/
 
 # 運ばれているか
 ls "$(gkill_server dvnf get)" | grep Auto
 ```
+
+記録する種類を切り替えたときは、書き出した JSONL の `event_type` で確かめます。
+
+```sh
+# 書き出させてから中身を見る
+am broadcast --user 0 -f 0x20 -n com.mt3hr.gkill_autolog/.ExportReceiver
+grep -o '"event_type":"[^"]*"' /sdcard/gkill_autolog/events/*.jsonl | sort | uniq -c
+```
+
+**`session` は常に出ます。** 切り替えを置いていないためで、これが出なくなったら
+何かが壊れています。アプリ利用をオフにして Chrome 履歴をオンにしたときに
+`browser_view` が消えないことも見てください（前面区間の照合材料が
+残っているかの確認になります）。
+
+録音は再起動のあとが要点です。**ほかの記録が自動で戻ること**を先に確かめます。
+戻らなければ、マイクの前景サービスの失敗でサービスごと落ちています。
+音声は止まっていて構いません（Android の制約）。アプリを開いて
+設定画面の状態表示が `音声: 録音中` に変われば正しい動きです。
 
 書き出したファイルは取り込み後に消えます。
 `events/` が空なら、渡すものが無いか、まだ書き出していないかのどちらかです。

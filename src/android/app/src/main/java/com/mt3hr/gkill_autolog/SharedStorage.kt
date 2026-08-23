@@ -29,6 +29,15 @@ object SharedStorage {
         get() = File(root, "screenshots")
 
     /**
+     * 録った音声の置き場。gkill 側の同期スクリプトが AutoAudio へ運ぶ。
+     *
+     * スクリーンショットと同じく、日付で分けずフラットに置く。
+     * dvnf move はディレクトリを渡すと移動先に入れ子で作ってしまう。
+     */
+    val audioDir: File
+        get() = File(root, "audio")
+
+    /**
      * GPX の置き場。gkill 側の同期スクリプトが GPSLogs へ運ぶ。
      *
      * 日別に YYYYMMDD.gpx を置く。この名前でないと gkill が日付で見つけられない

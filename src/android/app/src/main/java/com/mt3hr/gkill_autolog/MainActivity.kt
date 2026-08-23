@@ -17,8 +17,12 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import com.mt3hr.gkill_autolog.collect.AudioCollector
 import com.mt3hr.gkill_autolog.export.JsonlExporter
 import com.mt3hr.gkill_autolog.store.GpsPointStore
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 /**
  * 設定と権限付与の画面。
@@ -42,6 +46,16 @@ class MainActivity : AppCompatActivity() {
         applyWindowInsets()
 
         val deviceInput = findViewById<EditText>(R.id.device)
+        val appUsageCheckBox = findViewById<CheckBox>(R.id.collect_app_usage)
+        val notificationCheckBox = findViewById<CheckBox>(R.id.collect_notification)
+        val mediaPlayCheckBox = findViewById<CheckBox>(R.id.collect_media_play)
+        val wifiCheckBox = findViewById<CheckBox>(R.id.collect_wifi)
+        val bluetoothCheckBox = findViewById<CheckBox>(R.id.collect_bluetooth)
+        val powerCheckBox = findViewById<CheckBox>(R.id.collect_power)
+        val appUsageIntervalInput = findViewById<EditText>(R.id.app_usage_interval)
+        val mediaPlayIntervalInput = findViewById<EditText>(R.id.media_play_interval)
+        val chromeHistoryIntervalInput = findViewById<EditText>(R.id.chrome_history_interval)
+        val exportIntervalInput = findViewById<EditText>(R.id.export_interval)
         val chromeCheckBox = findViewById<CheckBox>(R.id.read_chrome_history)
         val screenshotCheckBox = findViewById<CheckBox>(R.id.capture_screenshots)
         val screenshotIntervalInput = findViewById<EditText>(R.id.screenshot_interval)
@@ -50,8 +64,22 @@ class MainActivity : AppCompatActivity() {
         val locationIntervalInput = findViewById<EditText>(R.id.location_interval)
         val locationAccuracyInput = findViewById<EditText>(R.id.location_accuracy)
         val highAccuracyCheckBox = findViewById<CheckBox>(R.id.high_accuracy_mode)
+        val audioCheckBox = findViewById<CheckBox>(R.id.record_audio)
+        val audioIntervalInput = findViewById<EditText>(R.id.audio_interval)
+        val audioDurationInput = findViewById<EditText>(R.id.audio_duration)
+        val audioScreenOffCheckBox = findViewById<CheckBox>(R.id.record_audio_while_screen_off)
 
         deviceInput.setText(config.device)
+        appUsageCheckBox.isChecked = config.collectAppUsage
+        notificationCheckBox.isChecked = config.collectNotifications
+        mediaPlayCheckBox.isChecked = config.collectMediaPlay
+        wifiCheckBox.isChecked = config.collectWifi
+        bluetoothCheckBox.isChecked = config.collectBluetooth
+        powerCheckBox.isChecked = config.collectPower
+        appUsageIntervalInput.setText(config.appUsageIntervalSeconds.toString())
+        mediaPlayIntervalInput.setText(config.mediaPlayIntervalSeconds.toString())
+        chromeHistoryIntervalInput.setText(config.chromeHistoryIntervalSeconds.toString())
+        exportIntervalInput.setText(config.exportIntervalMinutes.toString())
         chromeCheckBox.isChecked = config.readChromeHistory
         screenshotCheckBox.isChecked = config.captureScreenshots
         screenshotIntervalInput.setText(config.screenshotIntervalMinutes.toString())
@@ -60,14 +88,26 @@ class MainActivity : AppCompatActivity() {
         locationIntervalInput.setText(config.locationIntervalSeconds.toString())
         locationAccuracyInput.setText(config.locationAccuracyMeters.toString())
         highAccuracyCheckBox.isChecked = config.highAccuracyMode
+        audioCheckBox.isChecked = config.recordAudio
+        audioIntervalInput.setText(config.audioIntervalMinutes.toString())
+        audioDurationInput.setText(config.audioDurationMinutes.toString())
+        audioScreenOffCheckBox.isChecked = config.recordAudioWhileScreenOff
 
         findViewById<Button>(R.id.save).setOnClickListener {
             config.device = deviceInput.text.toString()
+            config.collectAppUsage = appUsageCheckBox.isChecked
+            config.collectNotifications = notificationCheckBox.isChecked
+            config.collectMediaPlay = mediaPlayCheckBox.isChecked
+            config.collectWifi = wifiCheckBox.isChecked
+            config.collectBluetooth = bluetoothCheckBox.isChecked
+            config.collectPower = powerCheckBox.isChecked
             config.readChromeHistory = chromeCheckBox.isChecked
             config.captureScreenshots = screenshotCheckBox.isChecked
             config.captureOnUnlock = captureOnUnlockCheckBox.isChecked
             config.recordLocation = locationCheckBox.isChecked
             config.highAccuracyMode = highAccuracyCheckBox.isChecked
+            config.recordAudio = audioCheckBox.isChecked
+            config.recordAudioWhileScreenOff = audioScreenOffCheckBox.isChecked
 
             // 空欄や範囲外はそのまま使わず、扱える値へ丸めて画面へ返す。
             val interval = Config.clampLocationInterval(
@@ -91,7 +131,55 @@ class MainActivity : AppCompatActivity() {
             config.screenshotIntervalMinutes = screenshotInterval
             screenshotIntervalInput.setText(screenshotInterval.toString())
 
+            // 録音は間隔を先に決める。長さは間隔より短くするので、
+            // 丸めるのに確定した間隔が要る。
+            val audioInterval = Config.clampAudioIntervalMinutes(
+                audioIntervalInput.text.toString().toIntOrNull()
+                    ?: Config.DEFAULT_AUDIO_INTERVAL_MINUTES
+            )
+            config.audioIntervalMinutes = audioInterval
+            audioIntervalInput.setText(audioInterval.toString())
+
+            val audioDuration = Config.clampAudioDurationMinutes(
+                audioDurationInput.text.toString().toIntOrNull()
+                    ?: Config.DEFAULT_AUDIO_DURATION_MINUTES,
+                audioInterval,
+            )
+            config.audioDurationMinutes = audioDuration
+            audioDurationInput.setText(audioDuration.toString())
+
+            // 見に行く間隔。どれも同じ上下限（収集ループの周期〜1時間）で丸める。
+            val appUsageInterval = Config.clampPollInterval(
+                appUsageIntervalInput.text.toString().toIntOrNull()
+                    ?: Config.DEFAULT_POLL_INTERVAL_SECONDS
+            )
+            config.appUsageIntervalSeconds = appUsageInterval
+            appUsageIntervalInput.setText(appUsageInterval.toString())
+
+            val mediaPlayInterval = Config.clampPollInterval(
+                mediaPlayIntervalInput.text.toString().toIntOrNull()
+                    ?: Config.DEFAULT_POLL_INTERVAL_SECONDS
+            )
+            config.mediaPlayIntervalSeconds = mediaPlayInterval
+            mediaPlayIntervalInput.setText(mediaPlayInterval.toString())
+
+            val chromeHistoryInterval = Config.clampPollInterval(
+                chromeHistoryIntervalInput.text.toString().toIntOrNull()
+                    ?: Config.DEFAULT_CHROME_HISTORY_INTERVAL_SECONDS
+            )
+            config.chromeHistoryIntervalSeconds = chromeHistoryInterval
+            chromeHistoryIntervalInput.setText(chromeHistoryInterval.toString())
+
+            val exportInterval = Config.clampExportInterval(
+                exportIntervalInput.text.toString().toIntOrNull()
+                    ?: Config.DEFAULT_EXPORT_INTERVAL_MINUTES
+            )
+            config.exportIntervalMinutes = exportInterval
+            exportIntervalInput.setText(exportInterval.toString())
+
             // 収集中なら、新しい設定で購読し直させる。
+            // マイクつきの常駐を掴めるのはここ（画面が前に出ている）だけなので、
+            // 音声をオンにしたときはこの経路が唯一の始まりどころになる。
             AutologService.reloadSettings(this)
             updateStatus()
         }
@@ -126,6 +214,9 @@ class MainActivity : AppCompatActivity() {
         findViewById<Button>(R.id.permission_background_location).setOnClickListener {
             requestBackgroundLocationPermission()
         }
+        findViewById<Button>(R.id.permission_microphone).setOnClickListener {
+            requestMicrophonePermission()
+        }
         findViewById<Button>(R.id.permission_battery).setOnClickListener {
             requestIgnoreBatteryOptimizations()
         }
@@ -133,7 +224,24 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        rearmMicrophone()
         updateStatus()
+    }
+
+    /**
+     * マイクつきの常駐を掴み直す。
+     *
+     * マイクを使う常駐は、アプリがバックグラウンドにいる間は開始できない。
+     * 端末の再起動から始まった常駐はマイクを持てないので、音声だけ記録されない。
+     * この画面が見えているいまなら掴めるので、必要なら掴み直させる。
+     *
+     * これが再起動後に音声が戻る唯一の道になる。
+     */
+    private fun rearmMicrophone() {
+        if (!config.recordAudio) return
+        if (AutologService.isMicrophoneForegroundActive()) return
+        if (!hasMicrophonePermission()) return
+        AutologService.reloadSettings(this)
     }
 
     /**
@@ -207,10 +315,17 @@ class MainActivity : AppCompatActivity() {
             appendLine("通知へのアクセス:     ${mark(hasNotificationAccess())}")
             appendLine("位置情報:             ${mark(hasLocationPermission())}")
             appendLine("位置情報(常に許可):   ${mark(hasBackgroundLocationPermission())}")
+            appendLine("マイク:               ${mark(hasMicrophonePermission())}")
             appendLine("バッテリー最適化除外: ${mark(isIgnoringBatteryOptimizations())}")
+            appendLine()
+            appendLine("記録する種類: ${enabledCollectTypes()}")
+            if (config.recordAudio) {
+                appendLine("音声:         ${audioStatus()}")
+            }
             appendLine()
             appendLine("書き出し先: ${SharedStorage.eventsDir}")
             appendLine("GPX:        ${SharedStorage.gpsLogDir}")
+            appendLine("音声:       ${SharedStorage.audioDir}")
             append("取り込みは Termux の autolog が行います")
 
             // 落ちた記録があれば気づけるようにする。
@@ -254,6 +369,24 @@ class MainActivity : AppCompatActivity() {
             android.content.pm.PackageManager.PERMISSION_GRANTED
     }
 
+    private fun hasMicrophonePermission(): Boolean =
+        checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) ==
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+
+    /**
+     * マイクを許可してもらう。
+     *
+     * 位置情報のボタンにまとめない。あのボタンは位置情報・Bluetooth・通知を
+     * まとめて求めるもので、ラベルと出るダイアログを揃えてある。
+     */
+    private fun requestMicrophonePermission() {
+        ActivityCompat.requestPermissions(
+            this,
+            arrayOf(android.Manifest.permission.RECORD_AUDIO),
+            REQUEST_PERMISSIONS,
+        )
+    }
+
     /**
      * 全ファイルアクセスを求める。
      *
@@ -275,6 +408,42 @@ class MainActivity : AppCompatActivity() {
         } catch (_: Exception) {
             startSettings(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
         }
+    }
+
+    /** いま記録する設定になっている種類。端末の利用は常に記録するので出さない。 */
+    private fun enabledCollectTypes(): String {
+        val enabled = buildList {
+            if (config.collectAppUsage) add("アプリ利用")
+            if (config.collectNotifications) add("通知")
+            if (config.collectMediaPlay) add("再生")
+            if (config.readChromeHistory) add("Chrome履歴")
+            if (config.collectWifi) add("Wi-Fi")
+            if (config.collectBluetooth) add("Bluetooth")
+            if (config.collectPower) add("充電")
+            if (config.captureScreenshots) add("スクショ")
+            if (config.recordLocation) add("位置情報")
+            if (config.recordAudio) add("音声")
+        }
+        return if (enabled.isEmpty()) "端末の利用のみ" else enabled.joinToString("・")
+    }
+
+    /**
+     * 音声が実際に録れているか。
+     *
+     * 再起動のあとはマイクを掴めず、設定はオンなのに録れていない状態になる。
+     * それを黙って続けないよう、掴めているかと直近の結果をここに出す。
+     */
+    private fun audioStatus(): String {
+        if (!AutologService.isMicrophoneForegroundActive()) {
+            return "休止（アプリを開くと戻ります）"
+        }
+        val failure = AudioCollector.lastFailure
+        if (failure.isNotEmpty()) return "録音中（直近の失敗: $failure）"
+
+        val at = AudioCollector.lastRecordedAt
+        if (at == 0L) return "録音中（まだ録れていません）"
+        val stamp = SimpleDateFormat("MM-dd HH:mm", Locale.US).format(Date(at))
+        return "録音中（最後に録れたのは $stamp）"
     }
 
     private fun mark(granted: Boolean) = if (granted) "許可" else "未許可"

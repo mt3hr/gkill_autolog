@@ -1,6 +1,6 @@
 {
   "name": "gkill_autolog",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "type": "module",
   "description": "PC・Android端末・Chromeから客観的な操作ログを自動収集し、gkillへ記録する",

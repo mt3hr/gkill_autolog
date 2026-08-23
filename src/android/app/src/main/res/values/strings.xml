@@ -11,7 +11,25 @@
     <string name="accessibility_description">どのアプリが前面になったかだけを見ます。画面の内容は読み取りません。</string>
 
     <string name="label_device">端末名（config.env に AUTOLOG_DEVICE があればそちらが優先）</string>
+
+    <string name="heading_collect_types">記録する種類</string>
+    <!-- 端末の利用だけは切り替えを置かない。取り込み側が利用セッションの区間を
+         組み立てる土台にしており、止めると他の区間も閉じられなくなるため。 -->
+    <string name="note_session_always">端末の利用（ロック解除・画面消灯）は常に記録します。取り込みで区間を組み立てる土台のためです。</string>
+    <string name="label_collect_app_usage">アプリ利用を記録する</string>
+    <string name="label_app_usage_interval">読み取る間隔（秒。5〜3600。空けても取りこぼしません）</string>
+    <string name="label_collect_notification">通知を記録する</string>
+    <string name="label_collect_media_play">動画・音楽の再生を記録する</string>
+    <string name="label_media_play_interval">見に行く間隔（秒。5〜3600。空けるほど再生時間が粗くなります）</string>
+    <string name="label_collect_wifi">Wi-Fi の接続を記録する</string>
+    <string name="label_collect_bluetooth">Bluetooth の接続を記録する</string>
+    <string name="label_collect_power">充電を記録する</string>
     <string name="label_read_chrome_history">Chrome の履歴を root で読む</string>
+    <string name="label_chrome_history_interval">読む間隔（秒。5〜3600。su を使う重い処理です）</string>
+    <!-- 通知・Wi-Fi・Bluetooth・充電・端末利用は、状態が変わったときに
+         Android から届くものを受けるだけなので、間隔という考え方が無い。 -->
+    <string name="note_event_no_interval">通知・Wi-Fi・Bluetooth・充電・端末の利用には間隔がありません。状態が変わったときに Android から届くものを受けています。</string>
+    <string name="label_export_interval">書き出しの間隔（分。1〜1440。書き出せなかった分は次回やり直します）</string>
     <string name="label_capture_screenshots">スクリーンショットを定期的に撮る（root）</string>
     <string name="label_screenshot_interval">撮影間隔（分。1〜1440。60 なら毎時00分）</string>
     <string name="label_capture_on_unlock">撮り逃したら次に画面を点けたときに撮る（時刻は実際に撮れた時刻）</string>
@@ -19,6 +37,13 @@
     <string name="label_location_interval">記録間隔（秒。10〜3600。短いほど電池を使う）</string>
     <string name="label_location_accuracy">許容誤差（m。5〜1000。これより粗い測位は記録しない）</string>
     <string name="label_high_accuracy_mode">高精度モード（こまめに測位して精度の良い点を選ぶ。電池を多く使う）</string>
+
+    <string name="label_record_audio">音声を定期的に録る</string>
+    <string name="label_audio_interval">録音間隔（分。1〜1440。60 なら毎時00分、30 なら毎時00分と30分）</string>
+    <string name="label_audio_duration">1回の長さ（分。1〜60。録音間隔より短くなります）</string>
+    <string name="label_record_audio_while_screen_off">画面が消えている間・ロック中も録る</string>
+    <!-- Android の制約。実装では埋められないので、設定画面にも書いておく。 -->
+    <string name="note_audio_after_reboot">端末を再起動すると、アプリを一度開くまで音声だけ記録されません。マイクを使う常駐は、アプリが前に出ている間しか始められないためです（ほかの記録は自動で戻ります）。</string>
 
     <string name="action_save">保存</string>
     <string name="action_start">収集を開始</string>
@@ -37,6 +62,7 @@
          ラベルも実際に出るダイアログと揃えておく。 -->
     <string name="permission_location">位置情報・Bluetooth・通知を許可（SSID と機器名に必要）</string>
     <string name="permission_background_location">位置情報を「常に許可」にする（GPX に必要）</string>
+    <string name="permission_microphone">マイクを許可（録音に必要）</string>
     <string name="permission_battery">バッテリー最適化の対象外にする</string>
 
     <string name="storage_permission_not_needed">この Android では全ファイルアクセスの許可は要りません</string>

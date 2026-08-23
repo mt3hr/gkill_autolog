@@ -16,6 +16,7 @@ import android.os.Looper
 import android.util.Log
 import androidx.core.content.ContextCompat
 import com.mt3hr.gkill_autolog.collect.AppUsageCollector
+import com.mt3hr.gkill_autolog.collect.AudioCollector
 import com.mt3hr.gkill_autolog.collect.ChromeHistoryCollector
 import com.mt3hr.gkill_autolog.collect.MediaCollector
 import com.mt3hr.gkill_autolog.collect.ScreenshotCollector
@@ -76,6 +77,12 @@ class AutologService : Service() {
     /** 直前に Chrome 履歴を読んだ時刻。 */
     private var lastChromeCollectAt: Long = 0
 
+    /** 直前にアプリ利用を読んだ時刻。 */
+    private var lastAppUsageCollectAt: Long = 0
+
+    /** 直前に再生を見に行った時刻。 */
+    private var lastMediaCollectAt: Long = 0
+
     /**
      * 収集ループが動いているか。
      *
@@ -93,6 +100,7 @@ class AutologService : Service() {
     private lateinit var chromeHistory: ChromeHistoryCollector
     private lateinit var screenshots: ScreenshotCollector
     private lateinit var location: LocationCollector
+    private lateinit var audio: AudioCollector
 
     private val tick = object : Runnable {
         override fun run() {
@@ -118,6 +126,7 @@ class AutologService : Service() {
         chromeHistory = ChromeHistoryCollector(applicationContext, store)
         screenshots = ScreenshotCollector(applicationContext, Config(applicationContext))
         location = LocationCollector(applicationContext, gpsStore)
+        audio = AudioCollector(applicationContext, Config(applicationContext))
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -133,6 +142,7 @@ class AutologService : Service() {
         // 何も収集しないフォアグラウンドサービスが残り続ける。
         if (intent?.action == ACTION_RELOAD_SETTINGS && collecting) {
             location.restart()
+            systemEvents.applySettings()
             return START_STICKY
         }
 
@@ -158,8 +168,12 @@ class AutologService : Service() {
     override fun onDestroy() {
         handler.removeCallbacks(tick)
         collecting = false
+        micForegroundActive = false
         systemEvents.stop()
         location.stop()
+        // 録りかけがあれば確定させる。停止そのものは録音スレッドで行われるので、
+        // ここでは待たない（主スレッドなので長く塞ぐと ANR になる）。
+        audio.stop()
         media.flush()
 
         // 溜まっている点を書き残さない。
@@ -182,14 +196,25 @@ class AutologService : Service() {
 
     private fun collectOnce() {
         val now = System.currentTimeMillis()
-        appUsage.collect(now)
-        media.collect(now)
+        val config = Config(applicationContext)
+
+        // 見に行く間隔は設定で決まる。既定は収集ループの周期と同じ（5秒）で、
+        // そのときは毎回通る。長くすると電池を使わなくなるが、
+        // 再生は積み上げの粒度そのものなので、そのぶん時間が粗くなる。
+        if (now - lastAppUsageCollectAt >= config.appUsageIntervalSeconds * SECOND_MS) {
+            lastAppUsageCollectAt = now
+            appUsage.collect(now)
+        }
+        if (now - lastMediaCollectAt >= config.mediaPlayIntervalSeconds * SECOND_MS) {
+            lastMediaCollectAt = now
+            media.collect(now)
+        }
 
         // Chrome の履歴は root コマンドの実行と履歴DBのコピーを伴うので、
         // 撮影と同じく主スレッドでは行わない。su の許可待ちで固まると ANR になる。
-        // 履歴は溜まってから読めるので、tick ごとではなく1分おきで足りる。
-        if (Config(applicationContext).readChromeHistory &&
-            now - lastChromeCollectAt >= CHROME_HISTORY_INTERVAL_MS &&
+        // 履歴は溜まってから読めるので、tick ごとには行わない。
+        if (config.readChromeHistory &&
+            now - lastChromeCollectAt >= config.chromeHistoryIntervalSeconds * SECOND_MS &&
             chromeCollecting.compareAndSet(false, true)
         ) {
             lastChromeCollectAt = now
@@ -206,6 +231,16 @@ class AutologService : Service() {
 
         // 撮影は root コマンドの実行を伴うので主スレッドでは行わない。
         ioExecutor.execute { screenshots.captureIfDue(now) }
+
+        // 録音は ioExecutor に載せない。数分かかるので、そこを塞ぐと
+        // 書き出し・GPX・撮影・Chrome 履歴まで全部止まる。
+        // AudioCollector は自分のスレッドを持っていて、ここでは区切りを見るだけ。
+        //
+        // マイクつきの常駐に入れていない間は録らない。掴めていないマイクから
+        // 録っても無音になるだけで、録れなかった時間の音を作ることになる。
+        // 途中でマイクを手放したときは、録りかけをそこで確定させる
+        // （観測はそこで終わったので、開いたまま捨てない）。
+        if (micForegroundActive) audio.recordIfDue(now) else audio.stop()
 
         writeGpxIfDue(now)
         exportIfDue(now)
@@ -248,7 +283,8 @@ class AutologService : Service() {
      * WorkManager 側はサービスが動いていないときの保険として残してある。
      */
     private fun exportIfDue(now: Long) {
-        if (now - lastExportAt < EXPORT_INTERVAL_MS) return
+        val intervalMs = Config(applicationContext).exportIntervalMinutes * MINUTE_MS
+        if (now - lastExportAt < intervalMs) return
         if (!exporting.compareAndSet(false, true)) return
 
         lastExportAt = now
@@ -277,25 +313,80 @@ class AutologService : Service() {
      * 権限が無ければ収集そのものが始められなくなってしまう。
      *
      * 実際、これで「収集を開始」を押すとアプリが落ちた。
+     *
+     * **マイクの種別は、位置情報と同じようには扱えない。**
+     * 位置情報には「常に許可」があるが、マイクにそれに当たる権限は無い。
+     * そのため、アプリがバックグラウンドにいる間は権限があっても
+     * マイクつきの常駐を*開始できない*（その場で例外になる）。
+     * 端末の再起動から始めるときは名指しで禁止されてもいる。
+     *
+     * 位置情報と同じように単純に足すと、再起動のたびにここが失敗し、
+     * 収集そのものが立ち上がらなくなる。マイクだけ失敗を飲み込んで、
+     * 残りの種別で入り直す。音声は次にアプリが開かれたときに始まる。
      */
     private fun startForegroundCompat(): Boolean {
         val notification = buildNotification()
-        return try {
-            // 種別の指定が要るのは Android 14 以降。それ以前はマニフェストの宣言で動く。
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                var types = ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
-                if (canUseLocationForegroundService()) {
-                    types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
-                }
-                startForeground(NOTIFICATION_ID, notification, types)
-            } else {
+
+        // 種別の指定が要るのは Android 14 以降。それ以前はマニフェストの宣言で動く。
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            return try {
                 startForeground(NOTIFICATION_ID, notification)
+                micForegroundActive = wantsMicrophoneForegroundService()
+                true
+            } catch (e: Exception) {
+                Log.e(TAG, "常駐に入れなかった", e)
+                false
             }
+        }
+
+        var types = ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+        if (canUseLocationForegroundService()) {
+            types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
+        }
+
+        if (wantsMicrophoneForegroundService()) {
+            try {
+                startForeground(
+                    NOTIFICATION_ID, notification,
+                    types or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE,
+                )
+                micForegroundActive = true
+                return true
+            } catch (e: Exception) {
+                Log.i(TAG, "マイクつきの常駐に入れなかった。音声以外は続ける: ${e.message}")
+            }
+        }
+
+        // **ここで必ず startForeground を呼ぶ。**
+        // startForegroundService で起こされた回は、常駐に入らずに戻ると
+        // ForegroundServiceDidNotStartInTimeException で落ちる。
+        // マイクを宣言し直せたら残す方が親切だが、そのために常駐へ入る手続きを
+        // 飛ばすと、収集そのものが道連れになる。
+        //
+        // 剥がれるのは、設定を保存した直後にアプリが背景へ回ったときなど
+        // ごく狭い場合だけ。そのとき録りかけは collectOnce の audio.stop() が
+        // 確定させ、次にアプリを開いたときに録音が戻る。
+        micForegroundActive = false
+
+        return try {
+            startForeground(NOTIFICATION_ID, notification, types)
             true
         } catch (e: Exception) {
             Log.e(TAG, "常駐に入れなかった", e)
             false
         }
+    }
+
+    /**
+     * マイクつきの常駐にしたいか。
+     *
+     * 設定でオンにしていて、かつ権限があるときだけ。
+     * どちらか欠けていると開始に失敗する（位置情報と同じ）。
+     */
+    private fun wantsMicrophoneForegroundService(): Boolean {
+        if (!Config(applicationContext).recordAudio) return false
+        return ContextCompat.checkSelfPermission(this, android.Manifest.permission.RECORD_AUDIO) ==
+            android.content.pm.PackageManager.PERMISSION_GRANTED
     }
 
     /**
@@ -346,24 +437,33 @@ class AutologService : Service() {
         private const val CHANNEL_ID = "gkill_autolog_service"
         private const val NOTIFICATION_ID = 1
 
-        /** 収集の間隔。MediaSession の再生時間もこの粒度で積み上げる。 */
+        /**
+         * マイクつきの常駐に入れているか。
+         *
+         * マイクはバックグラウンドから掴めないので、一度掴めたら録音していない間も
+         * 持ち続ける。持てていない間は録らない（無音のファイルをでっち上げないため）。
+         *
+         * 設定画面が「音声が動いているか」を出すのと、
+         * 掴み直しが要るかを判断するのに読む。設定画面もサービスも同じプロセスにある。
+         */
+        @Volatile
+        private var micForegroundActive = false
+
+        /** マイクつきの常駐に入れているか。設定画面から読む。 */
+        fun isMicrophoneForegroundActive(): Boolean = micForegroundActive
+
+        /**
+         * 収集ループの周期。
+         *
+         * 何かを見に行く間隔の下限でもある。設定で決める各間隔は、
+         * この周期のうえで「そろそろか」を見るだけなので、これより
+         * 細かくはならない。周期そのものを設定にはしない。
+         * 長くすると撮影や録音の区切りを跨いで見落とす。
+         */
         private const val TICK_INTERVAL_MS = 5_000L
 
-        /**
-         * Chrome 履歴を読む間隔。
-         *
-         * su の起動と履歴DBのコピーを伴う重い処理なので tick ごとには行わない。
-         * 履歴は溜まってから読めるため、間隔を空けても取りこぼさない。
-         */
-        private const val CHROME_HISTORY_INTERVAL_MS = 60_000L
-
-        /**
-         * 書き出しの間隔。
-         *
-         * 書き出せなかった分は端末に残って次回やり直されるので、間隔が長くても失われない。
-         * すぐ書き出したいときはアプリの「今すぐ書き出し」を使う。
-         */
-        private const val EXPORT_INTERVAL_MS = 60 * 60 * 1000L
+        private const val SECOND_MS = 1_000L
+        private const val MINUTE_MS = 60 * SECOND_MS
 
         /**
          * GPX を書き出す間隔。
