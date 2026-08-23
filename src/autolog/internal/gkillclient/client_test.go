@@ -3,6 +3,7 @@ package gkillclient
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -36,6 +37,15 @@ func newTestClient(t *testing.T, server *httptest.Server) *Client {
 func writeJSON(t *testing.T, w http.ResponseWriter, body any) {
 	t.Helper()
 	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(body); err != nil {
+		t.Fatalf("failed to encode response: %v", err)
+	}
+}
+
+// writeJSONBody は WriteHeader を呼んだあとの w へ本文だけを書く。
+// writeJSON はヘッダも書くので、ステータスを自分で決めるテストではこちらを使う。
+func writeJSONBody(t *testing.T, w http.ResponseWriter, body any) {
+	t.Helper()
 	if err := json.NewEncoder(w).Encode(body); err != nil {
 		t.Fatalf("failed to encode response: %v", err)
 	}
@@ -220,6 +230,116 @@ func TestSessionExpiryRetriesOnce(t *testing.T) {
 	}
 	if logins != 2 {
 		t.Errorf("login の回数 = %d, want 2 (初回 + 再取得)", logins)
+	}
+}
+
+// gkill は 2026-08 から異常時に 4xx/5xx を返す(ADR-0045)。
+// エラーの中身は今までどおり本文の errors にしか入っていないので、
+// **ステータスで打ち切ると再ログインが不通になる**。ここが落ちたら、
+// その端末の取り込みが丸ごと止まる。
+func TestSessionExpiryRetriesOnceWithHTTP401(t *testing.T) {
+	var logins, attempts int
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/login":
+			logins++
+			writeJSON(t, w, map[string]any{"session_id": "session-2"})
+		case "/api/add_kmemo":
+			attempts++
+			if attempts == 1 {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusUnauthorized)
+				writeJSONBody(t, w, map[string]any{
+					"errors": []map[string]string{
+						{"error_code": codeAccountSessionExpired, "error_message": "セッションの期限が切れています"},
+					},
+				})
+				return
+			}
+			writeJSON(t, w, map[string]any{})
+		default:
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := newTestClient(t, server)
+	if _, err := client.AddKmemo(context.Background(), Kmemo{
+		Content:     "通知本文",
+		RelatedTime: fixedTime,
+	}); err != nil {
+		t.Fatalf("AddKmemo: %v", err)
+	}
+
+	if attempts != 2 {
+		t.Errorf("add_kmemo の呼び出し回数 = %d, want 2", attempts)
+	}
+	if logins != 2 {
+		t.Errorf("login の回数 = %d, want 2 (初回 + 再取得)", logins)
+	}
+}
+
+// 回数制限(429)でも「15分待ってください」の案内が出ること。
+//
+// ここが効かないと、端末ごとにログインを回すスクリプトが
+// **制限に当たったまま回り続けてログイン枠を使い潰す**。
+func TestRateLimitErrorExplainsWaitWithHTTP429(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusTooManyRequests)
+		writeJSONBody(t, w, map[string]any{
+			"errors": []map[string]string{
+				{"error_code": codeLoginRateLimit, "error_message": "回数制限です"},
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := newTestClient(t, server)
+	_, err := client.AddKmemo(context.Background(), Kmemo{
+		Content:     "本文",
+		RelatedTime: fixedTime,
+	})
+	if err == nil {
+		t.Fatal("回数制限はエラーになるべき")
+	}
+	if !strings.Contains(err.Error(), "15 分") {
+		t.Errorf("回数制限の案内が出ていない: %v", err)
+	}
+}
+
+// 非200でも本文の errors が読めること(業務エラーの一般形)。
+func TestNon200WithErrorsIsAPIError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/login" {
+			writeJSON(t, w, map[string]any{"session_id": "session-1"})
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		writeJSONBody(t, w, map[string]any{
+			"errors": []map[string]string{
+				{"error_code": "ERR000058", "error_message": "既に同じIDのKmemoがあります"},
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := newTestClient(t, server)
+	_, err := client.AddKmemo(context.Background(), Kmemo{
+		Content:     "本文",
+		RelatedTime: fixedTime,
+	})
+	if err == nil {
+		t.Fatal("409 はエラーになるべき")
+	}
+	var apiError *APIError
+	if !errors.As(err, &apiError) {
+		t.Fatalf("*APIError で返るべき(ステータスで打ち切っていないか確認): %v", err)
+	}
+	if len(apiError.Errors) != 1 || apiError.Errors[0].ErrorCode != "ERR000058" {
+		t.Errorf("error_code が読めていない: %+v", apiError.Errors)
 	}
 }
 

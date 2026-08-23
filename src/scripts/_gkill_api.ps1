@@ -90,12 +90,35 @@ function Invoke-GkillApi([string]$BaseUrl, [string]$Path, [hashtable]$Body) {
         }
         if (-not $detail) { $detail = $_.Exception.Message }
 
+        # **gkill の業務エラーはここへ来る。**
+        # gkill は 2026-08 から異常時に 4xx/5xx を返すようになった (ADR-0045)。
+        # Invoke-RestMethod は非2xxで例外を投げるので、そのまま throw すると
+        # 本文の errors がオブジェクトとして返らず、
+        # Get-GkillError も Test-GkillRateLimited も呼ばれなくなる。
+        #
+        # 特に回数制限 (ERR000374) を取りこぼすと、端末ごとにログインを回すループが
+        # 「1台失敗しただけ」と見なして回り続け、**残りのログイン枠を使い潰す**。
+        # gkill のログインは IP ごとに15分で10回まで。実際に起きた事故。
+        #
+        # なので本文が gkill 形式 (errors を持つ JSON) なら、例外にせず応答として返す。
+        # 呼び出し側は今までどおり errors を見て判断する。
+        if ($detail) {
+            $parsed = $null
+            try { $parsed = $detail | ConvertFrom-Json } catch { $parsed = $null }
+            if ($parsed -and ($parsed.PSObject.Properties.Name -contains 'errors')) {
+                return $parsed
+            }
+        }
+
         throw "API $Path が失敗しました (HTTP $status): $detail"
     }
 }
 
 # Get-GkillError は応答の errors を1行にまとめる。
-# gkill は HTTP 200 でも errors に中身を入れることがある。
+#
+# gkill は HTTP 200 でも errors に中身を入れることがあり、逆に 4xx/5xx でも
+# 中身は errors にしか入っていない。Invoke-GkillApi が非2xxでも
+# gkill 形式の本文なら応答として返すので、呼び出し側は今までどおりこれを見ればよい。
 function Get-GkillError($Response) {
     if (-not $Response) { return $null }
     if (-not $Response.errors) { return $null }

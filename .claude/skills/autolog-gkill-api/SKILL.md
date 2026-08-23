@@ -1,6 +1,6 @@
 ---
 name: autolog-gkill-api
-description: "gkill の HTTP API へ書き込む側（src/autolog/internal/gkillclient/）の契約。HTTP 200 でも本文の errors を見ること、add_urlog はサーバが対象URLを取りに行くので URLogRateLimit で1秒に1件へ抑えタイトルは自分で埋めること、ログインは IP ごと15分10回で一度失敗したらその実行中は再試行しないこと、rep_name は無視され書き分けは端末別ユーザーで行うこと、update_user_reps は全件置換であること、IDF は mtime を記録時刻にすること、Kyou の ID とタグ ID を決定的に導く名前ベース UUID を扱う。src/autolog/internal/gkillclient/client.go・writer.go を編集するとき、gkill へ送る種別を足すとき必読。「取り込みが途中から全部書けなくなる」「ログインできない」の調査でも必読。"
+description: "gkill の HTTP API へ書き込む側（src/autolog/internal/gkillclient/）の契約。ステータスで打ち切らず本文の errors を見ること、add_urlog はサーバが対象URLを取りに行くので URLogRateLimit で1秒に1件へ抑えタイトルは自分で埋めること、ログインは IP ごと15分10回で一度失敗したらその実行中は再試行しないこと、rep_name は無視され書き分けは端末別ユーザーで行うこと、update_user_reps は全件置換であること、IDF は mtime を記録時刻にすること、Kyou の ID とタグ ID を決定的に導く名前ベース UUID を扱う。src/autolog/internal/gkillclient/client.go・writer.go を編集するとき、gkill へ送る種別を足すとき必読。「取り込みが途中から全部書けなくなる」「ログインできない」の調査でも必読。"
 ---
 
 # gkill API へ書き込む側の契約
@@ -11,7 +11,13 @@ description: "gkill の HTTP API へ書き込む側（src/autolog/internal/gkill
 
 ## gkill 側で踏みやすい落とし穴
 
-- **応答は HTTP 200 でも失敗のことがある。** 本文の `errors` を必ず見る
+- **ステータスで打ち切る前に本文を読む。** gkill は異常時に 4xx/5xx を返すが（ADR-0045）、
+  **エラーの中身（`error_code`）は本文の `errors` にしか入っていない**。
+  ステータスだけを見ると「HTTP 401」しか分からず、セッション切れなのか権限不足なのか
+  判別できない。逆に HTTP 200 でも `errors` に中身が入ることがあるので、両方を見る。
+  `client.go` の `post()` は先に本文をデコードしてから両方を見る形になっている。
+  ここを崩すと `isAuthError`（再ログイン）も `isRateLimited`（15分待ちの案内）も
+  一切効かなくなり、その端末の取り込みが丸ごと止まる
 - **`rep_name` は無視される。** 追加ユースケースが書き込み用リポジトリ固定。書き分けは端末別ユーザーで行う
 - **ログインは IP ごとに 15 分で 10 回まで。** ユーザー単位ではない。確認スクリプトの連打で本番の取り込みが全滅する。一度失敗したら実行中は再試行しない
 - **`add_urlog` はサーバが対象 URL を取得しに行く。** 1秒に1件へ抑え、タイトルは自分で埋める
