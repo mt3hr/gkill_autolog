@@ -1,5 +1,7 @@
 package com.mt3hr.gkill_autolog.store
 
+// 編集前に読む: .claude/skills/autolog-android/SKILL.md（この領域の不変条件の正本）
+
 import android.content.ContentValues
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase

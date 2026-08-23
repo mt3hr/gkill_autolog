@@ -21,6 +21,8 @@
 // gkill 側へ問い合わせての重複検査は行わない。
 package ledger
 
+// 編集前に読む: .claude/skills/autolog-pipeline/SKILL.md（この領域の不変条件の正本）
+
 import (
 	"context"
 	"database/sql"
