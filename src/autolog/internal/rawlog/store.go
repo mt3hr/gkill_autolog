@@ -1,5 +1,7 @@
 package rawlog
 
+// 編集前に読む: .claude/skills/autolog-pipeline/SKILL.md（この領域の不変条件の正本）
+
 import (
 	"context"
 	"database/sql"

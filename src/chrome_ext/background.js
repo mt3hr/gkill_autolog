@@ -8,6 +8,8 @@
 // MV3 の Service Worker はいつでも停止されるため、状態とキューは
 // すべて chrome.storage へ置き、メモリ上には持たない。
 
+// 編集前に読む: .claude/skills/autolog-chrome-ext/SKILL.md（この領域の不変条件の正本）
+
 import { DEFAULT_ENDPOINT, KEY_QUEUE, KEY_SETTINGS } from "./shared.js";
 
 const ALARM_NAME = "gkill-autolog-tick";

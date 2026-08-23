@@ -9,6 +9,8 @@
 // 実際にどの端末で記録されたのかが Kyou に残らず、やむなくタグで代替していた。
 package gkillclient
 
+// 編集前に読む: .claude/skills/autolog-gkill-api/SKILL.md（この領域の不変条件の正本）
+
 import (
 	"bytes"
 	"context"

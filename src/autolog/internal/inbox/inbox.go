@@ -10,6 +10,8 @@
 // autolog は .jsonl だけを読むので、途中まで書かれた行を読むことがない。
 package inbox
 
+// 編集前に読む: .claude/skills/autolog-pipeline/SKILL.md（この領域の不変条件の正本）
+
 import (
 	"bufio"
 	"context"

@@ -9,6 +9,8 @@
 // 端末をまたぐ受け口は持たない。各端末は自分で集めて自分の gkill へ取り込む。
 package ingest
 
+// 編集前に読む: .claude/skills/autolog-chrome-ext/SKILL.md（この領域の不変条件の正本）
+
 import (
 	"context"
 	"crypto/subtle"

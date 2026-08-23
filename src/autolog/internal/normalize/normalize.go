@@ -8,6 +8,8 @@
 // 判定基準を1か所に集めるため、Chrome 拡張や収集プログラムの側では絞り込みをしない。
 package normalize
 
+// 編集前に読む: .claude/skills/autolog-pipeline/SKILL.md（この領域の不変条件の正本）
+
 import (
 	"crypto/sha256"
 	"encoding/hex"
