@@ -108,7 +108,7 @@ Invoke-GkillApi 'http://127.0.0.1:19998' '/api/add_user' @{
 作ったユーザーのパスワードも、`account.db` の `PASSWORD_RESET_TOKEN` を使って
 同じ `/api/set_new_password` で設定します。
 
-**応答の `errors` を必ず見てください。** gkill は HTTP 200 でも失敗を返します
+**応答の `errors` を必ず見てください。** gkill は HTTP 200 でも失敗を返し、4xx/5xx のときも理由は本文にしかありません
 （`Get-GkillError $response` で1行にまとまります）。
 
 ### 取り込みの検証

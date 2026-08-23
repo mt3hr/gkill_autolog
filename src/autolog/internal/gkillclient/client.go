@@ -144,8 +144,10 @@ type GkillError struct {
 
 // APIError は API が errors を返したことを表す。
 //
-// gkill は異常時も HTTP 200 を返し、本文の errors にエラーを載せる。
-// ステータスコードだけを見ていると失敗を見落とす。
+// gkill は異常時に 4xx/5xx を返すが、**エラーの中身は本文の errors にしか入っていない**。
+// ステータスコードだけを見ていると error_code が読めず、セッション切れなのか
+// 権限不足なのか判別できない。逆に HTTP 200 でも errors に中身が入ることがあるので、
+// post() は先に本文をデコードしてから両方を見る。
 type APIError struct {
 	Path   string
 	Errors []GkillError
@@ -266,6 +268,10 @@ func (c *Client) callOnce(ctx context.Context, path string, build func(sessionID
 	return nil
 }
 
+// maxResponseBodyLimit は応答本文を読む上限。
+// autolog が叩くのは追加系とrep名一覧だけなので、実用上は当たらない。
+const maxResponseBodyLimit = 8 * 1024 * 1024
+
 // post は JSON を POST してレスポンスを out へ読む。
 func (c *Client) post(ctx context.Context, path string, body any, out any) error {
 	encoded, err := json.Marshal(body)
@@ -285,15 +291,28 @@ func (c *Client) post(ctx context.Context, path string, body any, out any) error
 	}
 	defer response.Body.Close()
 
-	if response.StatusCode != http.StatusOK {
-		// 本文に原因が出ていることがある。
-		// HTTPS のサーバへ HTTP で繋いだ場合など、JSON ですらないことも多い。
-		snippet, _ := io.ReadAll(io.LimitReader(response.Body, errorBodyLimit))
-		return fmt.Errorf("gkill API %s が HTTP %d を返した: %s",
-			path, response.StatusCode, strings.TrimSpace(string(snippet)))
+	// **ステータスで打ち切る前に本文を読む。**
+	// gkill は 2026-08 から異常時に 4xx/5xx を返すが、エラーの中身(error_code)は
+	// 今までどおり本文の errors 配列にしか入っていない。ここで打ち切ると
+	// 呼び出し側の call() が *APIError を受け取れず、
+	// **セッション切れの再ログイン(isAuthError)も、回数制限の案内(isRateLimited)も
+	// 一切効かなくなる**。取り込みがその端末ぶん丸ごと止まる。
+	rawBody, err := io.ReadAll(io.LimitReader(response.Body, maxResponseBodyLimit))
+	if err != nil {
+		return fmt.Errorf("gkill API %s の応答を読めない (HTTP %d): %w", path, response.StatusCode, err)
 	}
 
-	if err := json.NewDecoder(response.Body).Decode(out); err != nil {
+	if err := json.Unmarshal(rawBody, out); err != nil {
+		// 本文が JSON ですらない場合。
+		// HTTPS のサーバへ HTTP で繋いだ場合などにこうなる。
+		snippet := rawBody
+		if len(snippet) > errorBodyLimit {
+			snippet = snippet[:errorBodyLimit]
+		}
+		if response.StatusCode != http.StatusOK {
+			return fmt.Errorf("gkill API %s が HTTP %d を返した: %s",
+				path, response.StatusCode, strings.TrimSpace(string(snippet)))
+		}
 		return fmt.Errorf("gkill API %s の応答を解釈できない: %w", path, err)
 	}
 	return nil

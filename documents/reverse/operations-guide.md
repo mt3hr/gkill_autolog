@@ -55,6 +55,8 @@ curl -sk -X POST "$BASE/api/set_new_password" -H 'Content-Type: application/json
 
 `$BASE` はその端末の gkill（例 `https://127.0.0.1:9999`）です。
 **応答が HTTP 200 でも `errors` が入っていることがあります。** 必ず中身を見てください。
+逆に 4xx/5xx でも、理由（`error_code`）は本文の `errors` にしか入っていません。
+`curl` で確かめるときは `-i` を付けてステータスと本文の両方を見てください。
 また **ログインは IP ごとに 15 分で 10 回まで**（成功も数えられます）なので、
 失敗しても続けて叩き直さないでください。
 
