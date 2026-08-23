@@ -1,10 +1,8 @@
 package com.mt3hr.gkill_autolog.collect
 
-import android.app.KeyguardManager
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import android.os.PowerManager
 import android.util.Log
 import com.mt3hr.gkill_autolog.Config
 import com.mt3hr.gkill_autolog.SharedStorage
@@ -41,11 +39,7 @@ class ScreenshotCollector(
     private val context: Context,
     private val config: Config,
 ) {
-    private val powerManager: PowerManager? =
-        context.getSystemService(Context.POWER_SERVICE) as? PowerManager
-
-    private val keyguardManager: KeyguardManager? =
-        context.getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
+    private val screen = ScreenState(context)
 
     /** 直近に処理した区切り。同じ区切りで二度撮らないために持つ。 */
     private var lastCapturedBucket: Long = 0
@@ -115,11 +109,7 @@ class ScreenshotCollector(
      * 画面が消えている間は撮らない。ロック画面が出ている間も撮らない。
      * ロック画面を撮っても中身が無く、Windows 側もロック中は撮らない（要件 §10）。
      */
-    private fun canCaptureNow(): Boolean {
-        if (powerManager?.isInteractive != true) return false
-        if (keyguardManager?.isKeyguardLocked == true) return false
-        return true
-    }
+    private fun canCaptureNow(): Boolean = screen.isInUse()
 
     private fun capture(capturedAt: Long) {
         if (!SharedStorage.prepare(SharedStorage.screenshotsDir)) {

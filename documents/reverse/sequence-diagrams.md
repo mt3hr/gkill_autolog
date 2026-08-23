@@ -127,9 +127,14 @@ sequenceDiagram
     W->>P: 7日より古い点を消す
 
     Note over Y: 同期のたび
-    Y->>S: dvnf copy gpslog/* GPSLogs
+    Y->>S: dvnf copy gpslog/*.gpx GPSLogs
     S->>G: GPSLogs_<端末>_<日付>/ へ入り、gpslog rep として読まれる
 ```
+
+**運ぶときは拡張子まで指定します。** `.tmp` から rename しているのは
+書きかけを読ませないためですが、`gpslog/*` だとその `.tmp` 自身に当たります。
+gkill は `Contains(".gpx")` で拾うので `.gpx.tmp` も読みに行き、
+パースに失敗するとその rep の GPS ログが丸ごと返らなくなります。
 
 毎回作り直すのは、GPX に閉じタグが要るからです。
 そのため**この DB を作り直す移行をしてはいけません。**

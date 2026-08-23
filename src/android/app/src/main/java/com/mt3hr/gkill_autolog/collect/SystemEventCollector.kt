@@ -10,6 +10,7 @@ import android.net.wifi.WifiManager
 import android.os.BatteryManager
 import android.os.Build
 import androidx.core.content.ContextCompat
+import com.mt3hr.gkill_autolog.Config
 import com.mt3hr.gkill_autolog.model.Event
 import com.mt3hr.gkill_autolog.model.EventType
 import com.mt3hr.gkill_autolog.model.SessionAction
@@ -44,12 +45,58 @@ class SystemEventCollector(
             }.apply()
         }
 
+    /**
+     * いま接続している Bluetooth 機器の名前。
+     *
+     * [lastSsid] と同じ理由で持つ。記録をやめるときに切断を書けないと、
+     * 接続区間が閉じないまま何日でも育つ。
+     */
+    private var connectedBluetoothDevices: Set<String>
+        get() = prefs.getStringSet(KEY_CONNECTED_BLUETOOTH, emptySet()) ?: emptySet()
+        set(value) {
+            // getStringSet が返す集合は書き換えてはいけないので、毎回作り直して渡す。
+            prefs.edit().putStringSet(KEY_CONNECTED_BLUETOOTH, LinkedHashSet(value)).apply()
+        }
+
+    /**
+     * 直前に記録した充電の状態。まだ記録していなければ null。
+     *
+     * これが無いと、設定を保存するたびに「充電中」を書くことになる。
+     * 取り込み側は後から来た開始を採るので、そのぶん充電区間の始まりが
+     * 遅い方へずれていく。
+     */
+    private var lastCharging: Boolean?
+        get() = if (prefs.contains(KEY_LAST_CHARGING)) {
+            prefs.getBoolean(KEY_LAST_CHARGING, false)
+        } else {
+            null
+        }
+        set(value) {
+            prefs.edit().apply {
+                if (value == null) remove(KEY_LAST_CHARGING) else putBoolean(KEY_LAST_CHARGING, value)
+            }.apply()
+        }
+
     private val prefs
         get() = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+
+    /**
+     * 記録する種類の判定。
+     *
+     * 受け取ってから枝ごとに見る。IntentFilter を組み替える形にすると、
+     * 設定を変えるたびに登録し直す配線が要るうえ、収集ループが動いていない
+     * ときの ACTION_RELOAD_SETTINGS の扱い（AutologService の collecting）にも
+     * 触ることになる。受けてから捨てるほうが単純で、反映も即時になる。
+     */
+    private val config get() = Config(context)
 
     private val receiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
             val now = System.currentTimeMillis()
+
+            // 端末の利用（ロック解除・画面消灯）には切り替えを置かない。
+            // 取り込み側がこれを使って利用セッションの区間を組み立てており、
+            // 止めるとアプリ利用も再生も区間として閉じられなくなる。
             when (intent.action) {
                 // 画面を点灯しただけでは記録しない。ロック解除されたときだけ利用開始とする（要件 §11.1）。
                 Intent.ACTION_USER_PRESENT ->
@@ -59,19 +106,19 @@ class SystemEventCollector(
                     store.put(sessionEvent(SessionAction.SCREEN_OFF, now))
 
                 WifiManager.NETWORK_STATE_CHANGED_ACTION ->
-                    recordWifiState(now)
+                    if (config.collectWifi) recordWifiState(now)
 
                 BluetoothDevice.ACTION_ACL_CONNECTED ->
-                    recordBluetooth(intent, connected = true, at = now)
+                    if (config.collectBluetooth) recordBluetooth(intent, connected = true, at = now)
 
                 BluetoothDevice.ACTION_ACL_DISCONNECTED ->
-                    recordBluetooth(intent, connected = false, at = now)
+                    if (config.collectBluetooth) recordBluetooth(intent, connected = false, at = now)
 
                 Intent.ACTION_POWER_CONNECTED ->
-                    store.put(powerEvent(charging = true, at = now))
+                    if (config.collectPower) recordPowerState(now, charging = true)
 
                 Intent.ACTION_POWER_DISCONNECTED ->
-                    store.put(powerEvent(charging = false, at = now))
+                    if (config.collectPower) recordPowerState(now, charging = false)
             }
         }
     }
@@ -90,10 +137,69 @@ class SystemEventCollector(
         ContextCompat.registerReceiver(context, receiver, filter, ContextCompat.RECEIVER_EXPORTED)
         registered = true
 
-        // 起動時点の状態を記録しておく。
+        // 起動時点の状態は [applySettings] が拾う。
+        applySettings()
+    }
+
+    /**
+     * 設定の変更を反映する。設定を保存したときと収集を始めるときに呼ぶ。
+     *
+     * **記録をやめるときは、開いている区間を閉じる。**
+     * 控え（[lastSsid] / [connectedBluetoothDevices] / [lastCharging]）を
+     * 残したまま記録を止めると、切断イベントが二度と出ない。取り込み側は
+     * 切断を観測するまでその接続を継続中とみなすので、次に観測の切れ目
+     * （収集の終了）が来るまで、ずっとつないでいたことになる。
+     * 常駐が続いている限り切れ目は来ないので、何日でも育つ。
+     *
+     * **記録を始めるときは、いまの状態を拾う。** ブロードキャストは状態が
+     * 変わったときにしか来ないので、これが無いと、繋いだままオンにしたものが
+     * 次に切り替わるまで記録されない。[recordWifiState] と [recordPowerState] は
+     * 控えと同じなら何も書かないので、保存のたびに呼んでも増えない。
+     *
+     * **Bluetooth だけは、始めるときに拾い直せない。** 接続中の機器の名前を
+     * 知るにはプロファイルごとの非同期な問い合わせが要る。繋いだままオンに
+     * した機器は、次に繋ぎ直したときから記録される。
+     */
+    fun applySettings() {
         val now = System.currentTimeMillis()
-        recordWifiState(now)
-        store.put(powerEvent(charging = isCharging(), at = now))
+
+        if (config.collectWifi) {
+            recordWifiState(now)
+        } else {
+            lastSsid?.let { previous ->
+                store.put(wifiEvent(previous, connected = false, at = now))
+                lastSsid = null
+            }
+        }
+
+        if (config.collectPower) {
+            recordPowerState(now)
+        } else if (lastCharging == true) {
+            store.put(powerEvent(charging = false, at = now))
+            lastCharging = false
+        }
+
+        if (!config.collectBluetooth) {
+            val connected = connectedBluetoothDevices
+            if (connected.isNotEmpty()) {
+                for (name in connected) {
+                    store.put(bluetoothEvent(name, connected = false, at = now))
+                }
+                connectedBluetoothDevices = emptySet()
+            }
+        }
+    }
+
+    /**
+     * 充電の状態を記録する。控えと同じなら何も書かない。
+     *
+     * 同じ状態を二度書くと、取り込み側が後から来た開始を採るため、
+     * 充電区間の始まりが遅い方へずれる。
+     */
+    private fun recordPowerState(at: Long, charging: Boolean = isCharging()) {
+        if (charging == lastCharging) return
+        store.put(powerEvent(charging = charging, at = at))
+        lastCharging = charging
     }
 
     fun stop() {
@@ -170,13 +276,21 @@ class SystemEventCollector(
             null
         } ?: return
 
-        store.put(
-            Event.instant(
-                EventType.BLUETOOTH, at,
-                JSONObject().put("device_name", name).put("connected", connected)
-            )
-        )
+        // 記録をやめるときに切断を書けるよう、繋がっているものを覚えておく。
+        connectedBluetoothDevices = if (connected) {
+            connectedBluetoothDevices + name
+        } else {
+            connectedBluetoothDevices - name
+        }
+
+        store.put(bluetoothEvent(name, connected = connected, at = at))
     }
+
+    private fun bluetoothEvent(name: String, connected: Boolean, at: Long): Event =
+        Event.instant(
+            EventType.BLUETOOTH, at,
+            JSONObject().put("device_name", name).put("connected", connected)
+        )
 
     private fun isCharging(): Boolean {
         val batteryManager = context.getSystemService(Context.BATTERY_SERVICE) as? BatteryManager
@@ -187,5 +301,7 @@ class SystemEventCollector(
     companion object {
         private const val PREFS_NAME = "system_event_collector"
         private const val KEY_LAST_SSID = "last_ssid"
+        private const val KEY_CONNECTED_BLUETOOTH = "connected_bluetooth_devices"
+        private const val KEY_LAST_CHARGING = "last_charging"
     }
 }

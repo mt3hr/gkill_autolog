@@ -4,6 +4,7 @@ import android.app.usage.UsageEvents
 import android.app.usage.UsageStatsManager
 import android.content.Context
 import android.content.pm.PackageManager
+import com.mt3hr.gkill_autolog.Config
 import com.mt3hr.gkill_autolog.model.Event
 import com.mt3hr.gkill_autolog.model.EventType
 import com.mt3hr.gkill_autolog.store.EventStore
@@ -43,6 +44,10 @@ class AppUsageCollector(
     fun collect(now: Long = System.currentTimeMillis()) {
         val manager = usageStatsManager ?: return
 
+        // 記録するかどうかは区間ごとに見る。ここで打ち切らないのは、
+        // 記録しない設定でも Chrome の前面区間だけは覚えておく必要があるため。
+        val record = Config(context).collectAppUsage
+
         val from = if (lastProcessedAt == 0L) now - INITIAL_LOOKBACK_MS else lastProcessedAt
         if (from >= now) return
 
@@ -66,6 +71,11 @@ class AppUsageCollector(
                     if (packageName == PACKAGE_CHROME) {
                         rememberChromeRange(start..usageEvent.timeStamp)
                     }
+                    // アプリ利用を記録しない設定でも、Chrome の前面区間は覚えたまま
+                    // ここへ来る。この区間が無いと ChromeHistoryCollector が
+                    // 「その訪問が実際に表示されたか」を判断できず、閲覧の記録が
+                    // 丸ごと落ちてしまう（要件 §12）。
+                    if (!record) continue
                     if (isExcluded(packageName)) continue
 
                     // 前面のままのアプリがあると lastProcessedAt がその開始時刻まで戻るため、

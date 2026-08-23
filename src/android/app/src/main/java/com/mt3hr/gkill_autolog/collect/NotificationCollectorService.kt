@@ -30,7 +30,12 @@ class NotificationCollectorService : NotificationListenerService() {
         val notification = sbn ?: return
         // このサービスはシステムにバインドされたままなので、常駐サービスを
         // 止めても呼ばれ続ける。「収集を停止」の意図に合わせてここでも見る。
-        if (!Config(applicationContext).collectionEnabled) return
+        val config = Config(applicationContext)
+        if (!config.collectionEnabled) return
+        // 通知を記録しない設定にしても MediaCollector は壊れない。
+        // getActiveSessions に要るのはシステム設定の「通知へのアクセス」であって、
+        // この設定ではないため。
+        if (!config.collectNotifications) return
         record(notification)
     }
 

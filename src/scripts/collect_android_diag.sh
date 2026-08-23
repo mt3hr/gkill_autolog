@@ -47,7 +47,7 @@ echo
 echo "===== 3. 共有ストレージの状況 ====="
 # screenshots に溜まっていれば「撮れているが運ばれていない」。
 # 空なら「撮れていない」。
-for dir in screenshots events gpslog; do
+for dir in screenshots events gpslog audio; do
   echo "--- $shared/$dir ---"
   ls -l "$shared/$dir" 2>&1 | head -20
   echo "  件数: $(ls -1 "$shared/$dir" 2>/dev/null | wc -l)"
@@ -69,7 +69,7 @@ su -c "dumpsys package $pkg" 2>&1 | grep -i "versionName\|versionCode\|lastUpdat
 echo
 echo "===== 6. アプリのログ ====="
 # 撮影の失敗はここに WARN で出る。
-su -c "logcat -d -s AutologScreenshot:V AutologService:V AutologLocation:V AutologConfig:V" 2>&1 | tail -80
+su -c "logcat -d -s AutologScreenshot:V AutologService:V AutologLocation:V AutologAudio:V AutologConfig:V" 2>&1 | tail -80
 
 echo
 echo "===== 7. Termux 側の autolog 取り込み ====="

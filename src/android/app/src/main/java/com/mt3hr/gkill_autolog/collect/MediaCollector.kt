@@ -7,6 +7,7 @@ import android.media.session.MediaController
 import android.media.session.MediaSessionManager
 import android.media.session.PlaybackState
 import android.util.Log
+import com.mt3hr.gkill_autolog.Config
 import com.mt3hr.gkill_autolog.model.Event
 import com.mt3hr.gkill_autolog.model.EventType
 import com.mt3hr.gkill_autolog.store.EventStore
@@ -79,6 +80,13 @@ class MediaCollector(
     /** サービスから定期的に呼ぶ。 */
     fun collect(now: Long = System.currentTimeMillis()) {
         val manager = sessionManager ?: return
+
+        if (!Config(context).collectMediaPlay) {
+            // 記録しない設定に変えた瞬間、計測中のものが宙に浮く。
+            // 観測はそこで終わったので、開いたまま捨てずに確定させる。
+            if (playing.isNotEmpty()) flush(now)
+            return
+        }
 
         val controllers = try {
             manager.getActiveSessions(listenerComponent)

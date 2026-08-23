@@ -37,12 +37,97 @@
             android:importantForAutofill="no"
             android:inputType="text" />
 
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:textStyle="bold"
+            android:text="@string/heading_collect_types" />
+
+        <CheckBox
+            android:id="@+id/collect_app_usage"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/label_collect_app_usage" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:labelFor="@+id/app_usage_interval"
+            android:text="@string/label_app_usage_interval" />
+
+        <EditText
+            android:id="@+id/app_usage_interval"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:importantForAutofill="no"
+            android:inputType="number" />
+
+        <CheckBox
+            android:id="@+id/collect_notification"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="@string/label_collect_notification" />
+
+        <CheckBox
+            android:id="@+id/collect_media_play"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="@string/label_collect_media_play" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:labelFor="@+id/media_play_interval"
+            android:text="@string/label_media_play_interval" />
+
+        <EditText
+            android:id="@+id/media_play_interval"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:importantForAutofill="no"
+            android:inputType="number" />
+
         <CheckBox
             android:id="@+id/read_chrome_history"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="12dp"
             android:text="@string/label_read_chrome_history" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:labelFor="@+id/chrome_history_interval"
+            android:text="@string/label_chrome_history_interval" />
+
+        <EditText
+            android:id="@+id/chrome_history_interval"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:importantForAutofill="no"
+            android:inputType="number" />
+
+        <CheckBox
+            android:id="@+id/collect_wifi"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="@string/label_collect_wifi" />
+
+        <CheckBox
+            android:id="@+id/collect_bluetooth"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/label_collect_bluetooth" />
+
+        <CheckBox
+            android:id="@+id/collect_power"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/label_collect_power" />
 
         <CheckBox
             android:id="@+id/capture_screenshots"
@@ -110,6 +195,79 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text="@string/label_high_accuracy_mode" />
+
+        <CheckBox
+            android:id="@+id/record_audio"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="@string/label_record_audio" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:labelFor="@+id/audio_interval"
+            android:text="@string/label_audio_interval" />
+
+        <EditText
+            android:id="@+id/audio_interval"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:importantForAutofill="no"
+            android:inputType="number" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:labelFor="@+id/audio_duration"
+            android:text="@string/label_audio_duration" />
+
+        <EditText
+            android:id="@+id/audio_duration"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:importantForAutofill="no"
+            android:inputType="number" />
+
+        <CheckBox
+            android:id="@+id/record_audio_while_screen_off"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/label_record_audio_while_screen_off" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="@string/note_audio_after_reboot" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:labelFor="@+id/export_interval"
+            android:text="@string/label_export_interval" />
+
+        <EditText
+            android:id="@+id/export_interval"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:importantForAutofill="no"
+            android:inputType="number" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="@string/note_event_no_interval" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="@string/note_session_always" />
 
         <Button
             android:id="@+id/save"
@@ -179,6 +337,12 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text="@string/permission_background_location" />
+
+        <Button
+            android:id="@+id/permission_microphone"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/permission_microphone" />
 
         <Button
             android:id="@+id/permission_battery"
