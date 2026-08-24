@@ -80,4 +80,4 @@ gpslog/
 *.stackdump
 
 # 個人情報検査のローカル NG 語リスト（コミットしない。checkPersonalInfo が読む）
-/verify_docs_personal_ngwords.local.txt
+verify_docs_personal_ngwords.local.txt

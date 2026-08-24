@@ -6,6 +6,7 @@
   "description": "PC・Android端末・Chromeから客観的な操作ログを自動収集し、gkillへ記録する",
   "license": "MIT",
   "scripts": {
+    "postinstall": "git config core.hooksPath .githooks || exit 0",
     "build": "npm run build_windows_amd64",
     "go_mod": "rimraf src/autolog/go.mod && rimraf src/autolog/go.sum && cd src/autolog && go mod init github.com/mt3hr/gkill_autolog/src/autolog && go mod tidy",
     "go_install": "cd src/autolog && go install ./cmd/autolog",
