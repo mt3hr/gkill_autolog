@@ -2,7 +2,7 @@
 //
 // 対象は YouTube / YouTube Music に限らない。ページの <video> / <audio> が
 // 実際に再生された秒数を数える。
-//   - 一時停止している間は数えない
+//   - 一時停止している間は数えない (止まったまま PAUSE_SPLIT_MS を超えたら区間を切る)
 //   - 広告の再生時間は数えない (YouTube 系 = YouTube / YouTube Music でのみ判定できる)
 //   - シークで飛んだ分は数えない
 //   - ループ再生・短い素材は数えない (装飾目的の自動再生を除くため)
@@ -23,6 +23,17 @@
   // REPORT_MS は Service Worker へ途中経過を送る間隔。
   // タブが突然閉じられても、ここまでの再生実績は残る。
   const REPORT_MS = 10000;
+
+  // PAUSE_SPLIT_MS は再生が止まったまま区間を続ける上限。
+  //
+  // これを超えて止まっていたらそこで区間を閉じ、再開後を別の再生にする。
+  // 区間の開始は固定なので、これが無いと途中の長い一時停止が区間に残る。
+  //
+  // normalize の WindowMergeWindow (1分) と同値にすること。短くすると、
+  // 切った区間を normalize が結合し直して一時停止が区間へ戻り、分割そのものが
+  // 無意味になる。これより短い中断はどのみち結合されるので1本のままでよい。
+  // Android の MediaCollector.kt も同じ値を持っている。
+  const PAUSE_SPLIT_MS = 60000;
 
   // MIN_MEDIA_DURATION_SECONDS はこれ未満の長さの素材を数えない。
   // 背景で流れる短い映像やループ素材を除くため。
@@ -347,6 +358,18 @@
       return;
     }
 
+    // 止まっているかどうかを先に決める。広告は「止まっている」に含めない。
+    // 広告の再生時間は数えないが、広告をまたいでも1本の再生として続ける。
+    const stopped = media.paused || media.ended;
+
+    if (!play && stopped) {
+      // 停止中のページから計測を始めない。開いたまま再生しない動画があり、
+      // そこを起点にすると再生していない時間が丸ごと区間に入る。
+      // 再生が始まれば play / playing イベントが ticker を動かし直す。
+      stopTicker();
+      return;
+    }
+
     if (!play || play.key !== key) {
       // 別のコンテンツへ切り替わった。自動再生で次へ進んだ場合もここ。
       // 前の再生を確定させてから新しく数え始める。1回の再生につき1件になる。
@@ -360,9 +383,21 @@
     // 次の動画のタイトルが前の再生に載ることはない。
     adoptMetadata();
 
-    if (media.paused || media.ended || isAdShowing()) {
+    if (stopped || isAdShowing()) {
       // 一時停止中と広告中は数えない。再開時に飛びとみなさないよう位置だけ追う。
       play.lastCurrentTime = media.currentTime;
+
+      // 止まったまま結合の窓を超えたら、そこで区間を閉じる。
+      // 再開したぶんは新しい playId の再生として数え直す。
+      //
+      // 広告では切らない。切ると、1本の視聴が広告のたびに分断されて
+      // 同じ動画の URLog が広告の数だけできてしまう。
+      if (stopped && now - play.endedAt > PAUSE_SPLIT_MS) {
+        report(true);
+        play = null;
+        stopTicker();
+        return;
+      }
     } else {
       const delta = media.currentTime - play.lastCurrentTime;
       play.lastCurrentTime = media.currentTime;

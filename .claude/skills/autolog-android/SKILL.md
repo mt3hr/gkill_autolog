@@ -1,6 +1,6 @@
 ---
 name: autolog-android
-description: "Android 収集アプリ（src/android/）と Android 上で動く Go の約束。書き出しファイル名の衝突で rename が黙って上書きすること、GpsPointStore の onUpgrade でテーブルを作り直さないこと、記録種別の既定値を false にしないことと「端末の利用」に切り替えを置かないこと、マイク種別の前景サービスは失敗を飲み込んで残りで入り直すこと、ioExecutor が単一スレッドであること、MediaRecorder は使うスレッドの上で生成すること、共有ストレージに SQLite を置かないこと、Go の time.Local が UTC 固定であることを扱う。src/android/・src/autolog/internal/config/timezone_android.go を編集するとき必読。「更新後に何も記録しなくなった」「当日の GPX が短くなる」の調査でも必読。"
+description: "Android 収集アプリ（src/android/）と Android 上で動く Go の約束。書き出しファイル名の衝突で rename が黙って上書きすること、GpsPointStore の onUpgrade でテーブルを作り直さないこと、記録種別の既定値を false にしないことと「端末の利用」に切り替えを置かないこと、再生の区間を一時停止でまたがせないこと、マイク種別の前景サービスは失敗を飲み込んで残りで入り直すこと、ioExecutor が単一スレッドであること、MediaRecorder は使うスレッドの上で生成すること、共有ストレージに SQLite を置かないこと、Go の time.Local が UTC 固定であることを扱う。src/android/・src/autolog/internal/config/timezone_android.go を編集するとき必読。「更新後に何も記録しなくなった」「当日の GPX が短くなる」「一時停止しているのに再生の TimeIs が伸びる」の調査でも必読。"
 ---
 
 # Android 収集アプリの不変条件
@@ -79,6 +79,25 @@ NULL のままにして「精度不明」として扱う。
 > 取り込み側がこれを使って利用セッションの区間を組み立てており、
 > 止めるとアプリ利用も再生も区間として閉じられなくなる
 > (normalize の `window.go` の継続中セッション、`state.go` の観測の切れ目)。
+
+## 再生の区間は一時停止をまたがない
+
+`collect/MediaCollector.kt`。実再生秒数 (`playedMillis`) は一時停止中を数えていないが、
+**区間の終わりに `now`（観測した時点の壁時計）を使うと、止めていた時間がそのまま
+TimeIs の長さになる。** MediaSession は一時停止しても数時間セッションを残すので、
+1曲の TimeIs が何時間にも育つ。
+
+- 区間の終わりは `lastPlayingAt`（最後に再生を観測した時刻）。`now` ではない
+- 止まったまま `PAUSE_SPLIT_MS` を超えたら区間を閉じ、再開後を別の区間として数え直す
+- **停止中のセッションからは区間を始めない。** 一時停止のまま残っているセッションを
+  起点にすると、再生していない時間が丸ごと区間に入る
+- **`PAUSE_SPLIT_MS` は normalize の `WindowMergeWindow`（1分）と同値にすること。**
+  短くすると、切った区間を normalize が結合し直して一時停止が区間へ戻り、
+  分割そのものが無意味になる。Chrome 拡張の `content_media.js` も同じ値を持つ
+  （[autolog-pipeline](../autolog-pipeline/SKILL.md) の閾値の節）
+- 控え (checkpoint) のキーを変えたら、**旧キーへ落とす読み方にする。**
+  更新前の版が書いた控えが `endedAt <= startedAt` で黙って捨てられ、
+  計測途中だった再生が失われる
 
 ## 書き出しはサービス自身が回す。WorkManager は保険
 
