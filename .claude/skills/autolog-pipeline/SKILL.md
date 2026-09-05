@@ -131,6 +131,12 @@ description: "生ログ→提案→台帳の中核（rawlog / normalize / ledger
 （「一瞬触っただけの操作は残さない」という同じ判断なので、端末の種類で基準が変わる理由がない）。
 **判定は割り込みの結合を済ませたあとの長さで行う** —— 短い区間どうしが結合されて下限を超えることがある。
 
+`WindowMergeWindow`（1分）は**収集側にも同じ値がある** —— Android の
+`MediaCollector.PAUSE_SPLIT_MS` と Chrome 拡張 `content_media.js` の `PAUSE_SPLIT_MS` で、
+「再生が止まったまま区間を続ける上限」として使う。**収集側だけを短くしてはいけない**
+—— 切った区間をここがそのまま結合し直し、一時停止が区間へ戻って分割が無意味になる
+（[autolog-android](../autolog-android/SKILL.md) / [autolog-chrome-ext](../autolog-chrome-ext/SKILL.md)）。
+
 `NotificationUpdateWindow` を無制限にしてはいけない —— Android は通知IDを使い回すので、
 処理する窓（通常1日、初回は7日）の中の別々の通知が最終状態だけに潰れ、
 **結果が取り込みの間隔に依存してしまう**。

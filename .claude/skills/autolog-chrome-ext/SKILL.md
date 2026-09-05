@@ -1,6 +1,6 @@
 ---
 name: autolog-chrome-ext
-description: "Chrome 拡張（src/chrome_ext/、Manifest V3）と受け口（src/autolog/internal/ingest/）の約束。chrome.storage の get から set は原子的でないので Promise チェーンで直列化すること、ロックの中から withState を呼ぶとデッドロックするので入口だけでロックを取ること（例外は removeFromQueue）、イベントを積んでから区間を消す順序、4xx は件数を半分に絞って原因を追い込み1件まで絞れたら捨てて前進すること、受け口は 127.0.0.1 のみに bind し Bearer トークンを要求し本文上限 8MB であることを扱う。src/chrome_ext/background.js・content_media.js・shared.js・src/autolog/internal/ingest/server.go を編集するとき必読。「閲覧が送られてこない」「キューが減らない」の調査でも必読。"
+description: "Chrome 拡張（src/chrome_ext/、Manifest V3）と受け口（src/autolog/internal/ingest/）の約束。chrome.storage の get から set は原子的でないので Promise チェーンで直列化すること、ロックの中から withState を呼ぶとデッドロックするので入口だけでロックを取ること（例外は removeFromQueue）、イベントを積んでから区間を消す順序、4xx は件数を半分に絞って原因を追い込み1件まで絞れたら捨てて前進すること、再生の区間を一時停止でまたがせず広告では切らないこと、受け口は 127.0.0.1 のみに bind し Bearer トークンを要求し本文上限 8MB であることを扱う。src/chrome_ext/background.js・content_media.js・shared.js・src/autolog/internal/ingest/server.go を編集するとき必読。「閲覧が送られてこない」「キューが減らない」「一時停止しているのに再生の TimeIs が伸びる」の調査でも必読。"
 ---
 
 # Chrome 拡張と受け口の不変条件
@@ -41,6 +41,26 @@ description: "Chrome 拡張（src/chrome_ext/、Manifest V3）と受け口（src
 
 Service Worker が止まっていた場合、**現在時刻は終了時刻として信用できない**
 （`now - view.heartbeatAt > STALE_MS` なら `heartbeatAt` を終了時刻にする）。
+
+## 再生の区間は一時停止をまたがない。広告では切らない
+
+`content_media.js` の `tick`。`play.endedAt` は再生中だけ進むので末尾の一時停止は
+入らないが、**`play.startedAt` は固定なので途中の長い一時停止は区間に残る。**
+
+- 止まったまま `PAUSE_SPLIT_MS` を超えたら `report(true)` して `play` を捨てる。
+  再開後は新しい `playId` の再生になる
+- **停止中のページからは計測を始めない。** 開いたまま再生していない動画を起点にすると、
+  再生していない時間が丸ごと区間に入る。ticker を止めても `play` / `playing` イベントが
+  動かし直すので取りこぼさない
+- **広告 (`isAdShowing`) では切らない。** 切ると1本の視聴が広告のたびに分断され、
+  **同じ動画の URLog が広告の数だけできる**（30秒未満の広告で対象が消えても待つ、と同じ理由）
+- **`PAUSE_SPLIT_MS` は normalize の `WindowMergeWindow`（1分）と同値にすること。**
+  短くすると、切った区間を normalize が結合し直して分割が無意味になる。
+  Android の `MediaCollector.kt` も同じ値を持つ
+
+分割は壁時計で測るので、`content_media.test.mjs` は `Date.now` を差し替えて検証する。
+既定は固定（＝壁時計が進まない前提の既存テストをそのまま生かす）で、
+進めたいテストだけが `advanceClock` で動かす。
 
 ## 4xx は半分に絞って原因を追い込み、1件まで絞れたら捨てて前進する
 

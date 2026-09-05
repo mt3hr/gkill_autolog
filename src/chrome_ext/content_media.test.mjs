@@ -2,8 +2,10 @@
 //
 // DOM の完全な再現ではない。計測ロジックが見る範囲
 // (querySelectorAll・広告クラス・MediaSession・タイマー) だけをスタブする。
-// tick は setInterval に頼らず手で回す。壁時計はほぼ進まないので、
-// maxDelta (wallDelta+1) の制約から1 tick あたり 1 秒未満の前進だけが数えられる。
+// tick は setInterval に頼らず手で回す。壁時計は固定し、進めたいテストだけが
+// advanceClock で動かす。固定のままなら maxDelta (wallDelta+1) の制約から
+// 1 tick あたり 1 秒未満の前進だけが数えられる。
+// 一時停止での区切り (PAUSE_SPLIT_MS) は壁時計で測るので、実時計では検証できない。
 //
 // 実行: npm run test_chrome_ext
 
@@ -48,6 +50,13 @@ globalThis.setInterval = (fn) => {
 globalThis.clearInterval = () => {
   tickFn = null;
 };
+// 壁時計。既定は固定で、進めたいテストだけが advanceClock で動かす。
+let clock = Date.now();
+Date.now = () => clock;
+function advanceClock(ms) {
+  clock += ms;
+}
+
 globalThis.chrome = {
   runtime: {
     sendMessage: async (message) => {
@@ -85,6 +94,15 @@ function fireVisibilityChange() {
 function playFor(video, seconds) {
   for (let played = 0; played < seconds; played += 0.9) {
     video.currentTime += 0.9;
+    tickFn();
+  }
+}
+
+// 再生を進めずに壁時計だけを seconds 秒進める。1 tick ごとに進めるので
+// wallDelta が跳ねず、直後の再生がシークの飛びとみなされない。
+function idleFor(seconds) {
+  for (let elapsed = 0; elapsed < seconds && tickFn; elapsed += 5) {
+    advanceClock(5000);
     tickFn();
   }
 }
@@ -205,6 +223,118 @@ test("一時停止中は currentTime が動いても加算されず、再開後�
     `一時停止中の分が加算された (playedSeconds=${finished[0].playedSeconds})`);
   const playIds = new Set(sentMessages.map((message) => message.playId));
   assert.equal(playIds.size, 1, "一時停止で再生が分断された");
+});
+
+test("1分を超える一時停止では区間を切り、再開後を別の再生として数え直す", () => {
+  reset();
+  globalThis.location.href = "https://www.youtube.com/watch?v=abcdefghijk";
+  const video = newVideo();
+  mediaElements = [video];
+  firePlay();
+
+  playFor(video, 40);
+
+  // 一時停止。区間の終わりは最後に再生していた時刻で、止めている間は伸びない。
+  const pausedAt = Date.now();
+  video.paused = true;
+  idleFor(120);
+
+  const paused = sentMessages.filter((message) => message.finished);
+  assert.equal(paused.length, 1, "1分を超えて止めても区間が切られない");
+  assert.equal(paused[0].endedAt, pausedAt, "区間の終わりに一時停止の時間が入った");
+  assert.equal(tickFn, null, "区間を切ったのに ticker が回り続けている");
+
+  // さらに1分置いてから再開する。
+  advanceClock(60000);
+  const resumedAt = Date.now();
+  video.paused = false;
+  firePlay();
+  playFor(video, 40);
+  firePagehide();
+
+  const finished = sentMessages.filter((message) => message.finished);
+  assert.equal(finished.length, 2, "再開後が別の再生になっていない");
+  assert.notEqual(finished[1].playId, finished[0].playId, "playId が使い回された");
+  assert.equal(finished[1].startedAt, resumedAt,
+    "再開後の区間が、止めていた時間を含む時刻から始まっている");
+});
+
+test("1分以内の一時停止では区間を切らず、1本の再生のまま続ける", () => {
+  reset();
+  globalThis.location.href = "https://www.youtube.com/watch?v=abcdefghijk";
+  const video = newVideo();
+  mediaElements = [video];
+  firePlay();
+
+  playFor(video, 40);
+
+  // 45秒の一時停止。normalize の結合の窓 (1分) の内側なので、
+  // 切っても結合し直されて同じ結果になる。切らずに1本のままにする。
+  video.paused = true;
+  idleFor(45);
+  assert.ok(tickFn, "1分以内の一時停止で区間が切られた");
+
+  video.paused = false;
+  playFor(video, 40);
+  firePagehide();
+
+  const finished = sentMessages.filter((message) => message.finished);
+  assert.equal(finished.length, 1, "1分以内の一時停止で再生が分断された");
+  assert.ok(finished[0].playedSeconds > 75 && finished[0].playedSeconds < 85,
+    `一時停止の45秒が加算された (playedSeconds=${finished[0].playedSeconds})`);
+});
+
+test("一時停止のまま開いたページでは計測を始めず、再生を始めた時刻から数える", () => {
+  reset();
+  globalThis.location.href = "https://www.youtube.com/watch?v=abcdefghijk";
+  const video = newVideo();
+  video.paused = true;
+  mediaElements = [video];
+
+  // 開いた時点では止まっている。ここを起点にすると、
+  // 再生していない時間が丸ごと区間に入る。
+  firePlay();
+  tickFn();
+  assert.equal(tickFn, null, "停止中のページで計測が始まった");
+
+  // 3分後に再生を始める。
+  advanceClock(180000);
+  const startedAt = Date.now();
+  video.paused = false;
+  firePlay();
+  playFor(video, 40);
+  firePagehide();
+
+  const finished = sentMessages.filter((message) => message.finished);
+  assert.equal(finished.length, 1, "確定が1回でない");
+  assert.equal(finished[0].startedAt, startedAt,
+    "開いたまま再生していなかった時間が区間に入った");
+});
+
+test("1分を超える広告では区間を切らず、1本の再生として続ける", () => {
+  reset();
+  globalThis.location.href = "https://www.youtube.com/watch?v=abcdefghijk";
+  const video = newVideo();
+  mediaElements = [video];
+  firePlay();
+
+  playFor(video, 40);
+
+  // 90秒の広告。要素は残ったまま ad-showing が立つ。
+  // ここで切ると1本の視聴が広告のたびに分断され、
+  // 同じ動画の URLog が広告の数だけできてしまう。
+  adShowing = true;
+  idleFor(90);
+  assert.ok(tickFn, "広告で区間が切られた");
+  adShowing = false;
+
+  playFor(video, 40);
+  firePagehide();
+
+  const playIds = new Set(sentMessages.map((message) => message.playId));
+  assert.equal(playIds.size, 1, "広告で再生が分断された");
+  const finished = sentMessages.filter((message) => message.finished);
+  assert.equal(finished.length, 1, "確定が複数回起きた");
 });
 
 test("シークで飛んだ分は前方も後方も加算されず、再生も分断されない", () => {

@@ -1,5 +1,7 @@
 package com.mt3hr.gkill_autolog.collect
 
+// 編集前に読む: .claude/skills/autolog-android/SKILL.md（この領域の不変条件の正本）
+
 import android.content.ComponentName
 import android.content.Context
 import android.content.pm.PackageManager
@@ -20,6 +22,9 @@ import org.json.JSONObject
  * 自アプリだけ除外する。
  *
  * 記録するのは実際に再生された秒数だけで、一時停止している間は数えない。
+ * 区間そのものも一時停止をまたがない。止まったまま PAUSE_SPLIT_MS を超えたら
+ * そこで区間を閉じ、再開してからを新しい区間として数え直す。
+ * 停止中のセッションからは区間を始めない。
  *
  * **検索URLや推測したURLは作らない**（要件 §8.2）。
  * ただし YouTube 系はメタデータの中に動画IDそのものが入っていることがあるので、
@@ -74,6 +79,8 @@ class MediaCollector(
         val startedAt: Long,
         var playedMillis: Long,
         var lastTickAt: Long,
+        /** 最後に再生を観測した時刻。区間の終わりはこれになる。 */
+        var lastPlayingAt: Long,
         var wasPlaying: Boolean,
     )
 
@@ -135,7 +142,10 @@ class MediaCollector(
                 val playedMillis = item.optLong("played_millis")
                 val title = item.optString("title")
                 val startedAt = item.optLong("started_at")
-                val endedAt = item.optLong("last_tick_at")
+                // 更新前の版が書いた控えには last_playing_at が無い。
+                // last_tick_at へ落とさないと endedAt <= startedAt で黙って捨てられ、
+                // 計測途中だった再生が失われる。
+                val endedAt = item.optLong("last_playing_at", item.optLong("last_tick_at"))
                 if (playedMillis <= 0 || title.isBlank() || endedAt <= startedAt) continue
 
                 val service = item.optString("service")
@@ -179,7 +189,7 @@ class MediaCollector(
                     .put("video_id", state.videoId)
                     .put("started_at", state.startedAt)
                     .put("played_millis", state.playedMillis)
-                    .put("last_tick_at", state.lastTickAt)
+                    .put("last_playing_at", state.lastPlayingAt)
             )
         }
         if (snapshot.length() == 0) {
@@ -204,19 +214,23 @@ class MediaCollector(
             finish(controller.packageName, now)
         }
 
-        val state = playing.getOrPut(controller.packageName) {
-            PlayState(
-                title = title,
-                artist = artist,
-                service = service,
-                appLabel = appLabel(controller.packageName),
-                videoId = "",
-                startedAt = now,
-                playedMillis = 0,
-                lastTickAt = now,
-                wasPlaying = isPlaying,
-            )
-        }
+        // 停止中のセッションからは区間を始めない。MediaSession は一時停止しても
+        // 数時間そのまま残るので、そこを起点にすると再生していない時間が
+        // 丸ごと区間に入る。
+        val existing = playing[controller.packageName]
+        if (existing == null && !isPlaying) return
+        val state = existing ?: PlayState(
+            title = title,
+            artist = artist,
+            service = service,
+            appLabel = appLabel(controller.packageName),
+            videoId = "",
+            startedAt = now,
+            playedMillis = 0,
+            lastTickAt = now,
+            lastPlayingAt = now,
+            wasPlaying = true,
+        ).also { playing[controller.packageName] = it }
 
         // 動画IDは再生開始直後のメタデータにはまだ入っていないことがある。
         // 一度確認できたらそのまま持ち、以降は上書きしない。
@@ -229,15 +243,23 @@ class MediaCollector(
         // 再生中だった区間だけを積み上げる。一時停止中は数えない。
         if (state.wasPlaying) {
             state.playedMillis += now - state.lastTickAt
+            state.lastPlayingAt = now
         }
         state.lastTickAt = now
         state.wasPlaying = isPlaying
+
+        // 止まったまま結合の窓を超えたら、そこで区間を閉じる。
+        // 再開したぶんは新しい区間として数え直す。
+        if (!isPlaying && now - state.lastPlayingAt > PAUSE_SPLIT_MS) {
+            finish(controller.packageName, now)
+        }
     }
 
     private fun finish(packageName: String, now: Long) {
         val state = playing.remove(packageName) ?: return
         if (state.wasPlaying) {
             state.playedMillis += now - state.lastTickAt
+            state.lastPlayingAt = now
         }
         if (state.playedMillis <= 0 || state.title.isBlank()) return
 
@@ -255,7 +277,9 @@ class MediaCollector(
             payload.put("url", watchUrl(state.service, state.videoId))
         }
 
-        store.put(Event.interval(EventType.MEDIA_PLAY, state.startedAt, now, payload))
+        // 区間の終わりは最後に再生を観測した時刻。ここで now を使うと、
+        // 一時停止していた時間がそのまま TimeIs の長さになる。
+        store.put(Event.interval(EventType.MEDIA_PLAY, state.startedAt, state.lastPlayingAt, payload))
     }
 
     /** 再生元の種別。YouTube 系以外はすべて app。 */
@@ -285,6 +309,18 @@ class MediaCollector(
 
     companion object {
         private const val TAG = "AutologMedia"
+
+        /**
+         * 再生が止まったまま区間を続ける上限。
+         *
+         * これを超えて止まっていたらそこで区間を閉じ、再開後を別の区間にする。
+         * **normalize の WindowMergeWindow（1分）と同値にすること。**
+         * 短くすると、切った区間を normalize が結合し直して一時停止が区間へ戻り、
+         * 分割そのものが無意味になる。これより短い中断（バッファリング・広告・
+         * 短い一時停止）はどのみち結合されるので、切らずに1本のままでよい。
+         * Chrome 拡張の content_media.js も同じ値を持っている。
+         */
+        private const val PAUSE_SPLIT_MS = 60_000L
 
         // 定数名は各所の PREFS_NAME と揃える。ファイル名は保存済みデータとの互換のため変えない。
         private const val PREFS_NAME = "media_checkpoint"
