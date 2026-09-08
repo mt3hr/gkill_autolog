@@ -41,8 +41,9 @@ autolog/
 │   └── helpers.go          サブコマンド間で共有する小物
 ├── internal/
 │   ├── rawlog/           生ログ。追記専用 SQLite とイベントの型
-│   ├── collect/          Windows での収集（ウィンドウ・セッション・Wi-Fi 等）
+│   ├── collect/          PC での収集（ウィンドウ・セッション・Wi-Fi 等）
 │   ├── winapi/           Win32 API のラッパ
+│   ├── linuxapi/         Linux の収集（D-Bus・evdev・X11）
 │   ├── shot/             スクリーンショットの撮影と WebP 変換
 │   ├── ingest/           Chrome の受け口 (HTTP)。拡張から閲覧・再生を受け取る
 │   ├── inbox/            Android の受け口。収集アプリが置いた JSONL の取り込み
@@ -57,9 +58,19 @@ autolog/
 
 ### プラットフォーム別のファイル
 
-Windows でしか動かない収集は `_windows.go` で分けています。
-他のプラットフォームでは `run_other.go` が「収集しない」実装を提供するので、
-Android 向けにビルドしても壊れません。
+収集のロジックはビルドタグの無いファイルに置き、OS を叩く部分だけを分けています。
+`collect` は `platform_windows.go` / `platform_linux.go` / `platform_other.go`、
+`shot` は `capture_windows.go` / `capture_linux.go` / `capture_other.go` です。
+どちらも対応していないプラットフォームでは「収集しない」「撮らない」実装になります。
+
+**ビルドタグは `linux && !android` と `!windows && (!linux || android)` で書きます。**
+Go では `GOOS=android` が `linux` のビルドタグも満たすため、`linux` だけで分けると
+Android 向けビルドが Linux の収集を取り込み、Termux の `autolog` が収集を始めてしまいます
+（収集は収集アプリの役目）。`npm run vet_android` がこの抜けを検出します。
+
+`linuxapi` は解析・計算だけの純粋な関数にビルドタグを付けません。
+`GOOS=linux` のテストはクロスコンパイルでは実行できないため、タグを付けると
+Windows の開発機で一度も走らないコードになります。
 
 タイムゾーンの扱いも同じ形です (`timezone_android.go` / `timezone_other.go`)。
 
@@ -129,7 +140,7 @@ Service Worker は随時停止するので、イベントはいったん `chrome
 `chrome.alarms` でまとめて送ります。送れた分だけ消します。
 積める上限は5000件で、あふれたら古いものから捨てます。
 
-## src/scripts — PowerShell スクリプト
+## src/scripts — 運用スクリプト
 
 | スクリプト | 用途 |
 | --- | --- |
@@ -143,10 +154,20 @@ Service Worker は随時停止するので、イベントはいったん `chrome
 | `register_tasks.ps1` | タスクスケジューラへ登録する |
 | `collect_android_diag.sh` | Android で撮影・取り込みが動かないときの情報を集める |
 | `autolog.env.example` | 設定ファイルの雛形 |
+| `linux/_autolog.sh` | Linux 側の共通処理。設定の読み込みと実行体の探索 |
+| `linux/run_collect.sh` | autolog.env を読み込んで常駐収集を起動する |
+| `linux/run_import.sh` | 取り込みを実行する。`--until-now` で「いま」の2分手前まで |
+| `linux/install_units.sh` | systemd のユーザーユニットを置いて有効にする |
+| `linux/*.service` / `linux/*.timer` | 常駐（ログイン時）と取り込み（毎日 4:00）のユニット |
 
-スクリプトは UTF-8 (BOM 付き) で保存します。設定ファイルも同じです。
+`.ps1` は UTF-8 (BOM 付き) で保存します。設定ファイルも同じです。
 BOM が無いと Windows PowerShell 5.1 が Shift_JIS として読み、
 日本語コメントの直後の行が黙って読み落とされます。
+
+`.sh` は改行を LF に固定します（`.gitattributes`）。CRLF だと実行できません。
+Linux の収集をサービスではなく**ユーザーのユニット**にするのは、
+前面ウィンドウとセッションの状態が画面付きのログインセッションからしか
+取れないためで、Windows でログオン時のタスクにしているのと同じ理由です。
 
 ビルドはここではなく npm スクリプトが担います。
 
@@ -173,7 +194,7 @@ Android 向けのつもりが Windows のバイナリ (MZ) になったことが
 リポジトリには入りません。
 
 ```
-$AUTOLOG_HOME/                既定は %LOCALAPPDATA%\gkill_autolog
+$AUTOLOG_HOME/                既定は %LOCALAPPDATA%\gkill_autolog（Linux は $HOME/.gkill_autolog）
 ├── raw.db                    生ログ（追記専用）
 ├── ledger.db                 書き込み済み台帳
 ├── url_denylist.txt          URLog にしない URL のパターン

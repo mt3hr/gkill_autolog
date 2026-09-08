@@ -1,0 +1,21 @@
+[Unit]
+# gkill_autolog の常駐収集。
+#
+# **システムのユニットではなくユーザーのユニットにする。**
+# 前面ウィンドウとセッションの状態は、画面付きのログインセッションに
+# 属するプロセスからしか取れない（Windows でサービスではなく
+# ログオン時のタスクにしているのと同じ理由）。
+Description=gkill_autolog collect
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+# install_units.sh がこのリポジトリの実際の場所へ書き換えて置く。
+# ここの値は雛形で、決め打ちのパスを配るためのものではない。
+ExecStart=%h/Git/gkill_autolog/src/scripts/linux/run_collect.sh
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=graphical-session.target

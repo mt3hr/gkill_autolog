@@ -1,5 +1,3 @@
-//go:build windows
-
 package collect
 
 import (
@@ -22,12 +20,12 @@ func newTestNetPower(t *testing.T) *netPowerCollector {
 	t.Cleanup(func() { store.Close() })
 
 	emitter := NewEmitter(store, rawlog.Device("TestDevice"), slog.New(slog.DiscardHandler))
-	c := newNetPowerCollector(emitter, slog.New(slog.DiscardHandler))
-	// 既定では何も観測できない状態にしておく。テストごとに上書きする。
-	c.ssidFn = func() (string, bool) { return "", true }
-	c.bluetoothFn = func() ([]string, bool) { return nil, true }
-	c.chargingFn = func() (bool, bool) { return false, true }
-	return c
+	// 既定では何も繋がっていない状態にしておく。テストごとに上書きする。
+	return newNetPowerCollector(emitter, slog.New(slog.DiscardHandler), netPowerProbes{
+		ssid:      func() (string, bool) { return "", true },
+		bluetooth: func() ([]string, bool) { return nil, true },
+		charging:  func() (bool, bool) { return false, true },
+	})
 }
 
 // drainEvents はキューに溜まったイベントを取り出す。

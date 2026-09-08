@@ -2,67 +2,30 @@
 
 package shot
 
+// 編集前に読む: .claude/skills/autolog-windows-collect/SKILL.md（この領域の不変条件の正本）
+
 import (
-	"context"
-	"fmt"
+	"image"
 	"log/slog"
-	"time"
 
 	"github.com/mt3hr/gkill_autolog/src/autolog/internal/config"
 	"github.com/mt3hr/gkill_autolog/src/autolog/internal/winapi"
 )
 
-// Capture は1枚撮って保存する。
-//
-// 画面がロックされている場合は撮らずに ErrLocked を返す（要件 §10）。
-// スリープ中はそもそもこの関数が呼ばれない（タイマーが動かない、
-// あるいは復帰後の次の区切りまで待つ）ため、撮り逃した分の補完は行わない。
-func Capture(cfg *config.Config, capturedAt time.Time) (*Result, error) {
-	if winapi.IsSessionLocked() {
-		return nil, ErrLocked
-	}
-
-	img, err := winapi.CaptureVirtualScreen()
-	if err != nil {
-		return nil, fmt.Errorf("failed to capture screen: %w", err)
-	}
-
-	return Save(img, cfg.ScreenshotDirFor(capturedAt), cfg.ScreenshotFileName(capturedAt, Extension), capturedAt)
-}
-
-// Run は設定した間隔で撮影し続ける。ctx が終わるまで返らない。
-//
-// 撮影に失敗しても収集全体は止めない。
-// 撮れなかった時間の画像を後から補完することはしない。
-func Run(ctx context.Context, cfg *config.Config, logger *slog.Logger) error {
-	interval := config.ClampScreenshotInterval(cfg.ScreenshotInterval)
-	logger.Info("スクリーンショットの定期撮影を始める", "interval", interval.String())
-
-	for {
-		next := NextTick(time.Now(), interval)
-		timer := time.NewTimer(time.Until(next))
-
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return nil
-		case now := <-timer.C:
-			// 通常は狙った時刻を記録時刻にし、スリープ復帰などで
-			// 大きく遅れて起きた場合だけ実際の時刻をそのまま使う。
-			capturedAt := CaptureTime(next, now, interval)
-
-			result, err := Capture(cfg, capturedAt)
-			switch {
-			case err == ErrLocked:
-				logger.Info("画面がロックされているため撮影しない", "at", capturedAt.Format(time.RFC3339))
-			case err != nil:
-				logger.Error("スクリーンショットに失敗した", "at", capturedAt.Format(time.RFC3339), "error", err)
-			default:
-				logger.Info("スクリーンショットを保存した",
-					"path", result.Path,
-					"size", fmt.Sprintf("%dx%d", result.Width, result.Height),
-					"bytes", result.Bytes)
-			}
-		}
+func init() {
+	newCapturer = func(_ *config.Config, _ *slog.Logger) (capturer, error) {
+		return windowsCapturer{}, nil
 	}
 }
+
+// windowsCapturer は GDI で仮想スクリーン全体を撮る。
+type windowsCapturer struct{}
+
+// Locked は画面がロックされているかを返す。
+// OpenInputDesktop が失敗するかどうかで判定する。
+func (windowsCapturer) Locked() bool { return winapi.IsSessionLocked() }
+
+// Capture は全モニターを1回の BitBlt で1枚に収める。
+func (windowsCapturer) Capture() (*image.RGBA, error) { return winapi.CaptureVirtualScreen() }
+
+func (windowsCapturer) Close() error { return nil }

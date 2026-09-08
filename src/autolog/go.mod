@@ -3,7 +3,10 @@ module github.com/mt3hr/gkill_autolog/src/autolog
 go 1.26.4
 
 require (
+	github.com/HugoSmits86/nativewebp v1.3.0
+	github.com/godbus/dbus/v5 v5.2.2
 	github.com/google/uuid v1.6.0
+	github.com/jezek/xgb v1.3.1
 	github.com/spf13/cobra v1.10.1
 	golang.org/x/sync v0.22.0
 	golang.org/x/sys v0.38.0
@@ -11,7 +14,6 @@ require (
 )
 
 require (
-	github.com/HugoSmits86/nativewebp v1.3.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect

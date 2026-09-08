@@ -45,6 +45,27 @@ const (
 	// config.env より先に決まる必要があるため、環境変数からしか設定できない。
 	EnvSharedDir = "AUTOLOG_SHARED_DIR"
 
+	// Linux の収集手段に関する設定。
+	//
+	// どれも既定は空で、空なら環境から手段を導く（何が動いているか、
+	// PATH に何があるか）。特定のデスクトップ環境の決め打ちは置かない。
+	// 標準の手段で取れない環境のための逃げ道として用意する。
+
+	// EnvLinuxWindowCommand は前面ウィンドウを JSON で出すコマンド。
+	// GNOME・KDE の Wayland にはウィンドウを取る標準の手段が無い。
+	EnvLinuxWindowCommand = "AUTOLOG_LINUX_WINDOW_COMMAND"
+	// EnvLinuxInputMethod は入力の観測手段。auto / evdev / x11 / none。
+	EnvLinuxInputMethod = "AUTOLOG_LINUX_INPUT_METHOD"
+	// EnvLinuxInputDevices は使う /dev/input/event* をカンマ区切りで固定する。
+	EnvLinuxInputDevices = "AUTOLOG_LINUX_INPUT_DEVICES"
+	// EnvLinuxSSIDCommand は SSID を1行で出すコマンド。
+	EnvLinuxSSIDCommand = "AUTOLOG_LINUX_SSID_COMMAND"
+	// EnvLinuxScreenshotMethod は撮影の手段。auto / x11 / command / portal。
+	EnvLinuxScreenshotMethod = "AUTOLOG_LINUX_SCREENSHOT_METHOD"
+	// EnvLinuxScreenshotCommand は画面を撮って {} のパスへ書くコマンド。
+	// {} が無ければ標準出力から読む。
+	EnvLinuxScreenshotCommand = "AUTOLOG_LINUX_SCREENSHOT_COMMAND"
+
 	// EnvAutoUserPrefix は端末別ユーザー名の接頭辞。
 	// 実際のユーザー名は 接頭辞 + 端末名（例: 接頭辞が myuser_auto_ なら myuser_auto_Laptop）。
 	EnvAutoUserPrefix = "GKILL_AUTO_USER_PREFIX"
@@ -121,6 +142,27 @@ type Config struct {
 	AutoUserPrefix string
 	// AutoPasswordSHA256 は端末別ユーザー共通のパスワード。
 	AutoPasswordSHA256 string
+
+	// Linux は Linux の収集手段に関する設定。他の OS では使わない。
+	Linux LinuxConfig
+}
+
+// LinuxConfig は Linux の収集手段に関する設定。
+//
+// 空が既定で、空なら環境から手段を導く。
+type LinuxConfig struct {
+	// WindowCommand は前面ウィンドウを JSON で出すコマンド。
+	WindowCommand string
+	// InputMethod は入力の観測手段。auto / evdev / x11 / none。
+	InputMethod string
+	// InputDevices は使う /dev/input/event* を固定するときに指定する。
+	InputDevices []string
+	// SSIDCommand は SSID を1行で出すコマンド。
+	SSIDCommand string
+	// ScreenshotMethod は撮影の手段。auto / x11 / command / portal。
+	ScreenshotMethod string
+	// ScreenshotCommand は画面を撮って {} のパスへ書くコマンド。
+	ScreenshotCommand string
 }
 
 // UseAutoUsers は端末別ユーザーへ書き分ける設定かどうかを返す。
@@ -226,7 +268,26 @@ func Load() (*Config, error) {
 		UsageTitle:          lookup(EnvUsageTitle),
 		AutoUserPrefix:      lookup(EnvAutoUserPrefix),
 		AutoPasswordSHA256:  lookup(EnvAutoPasswordSHA256),
+		Linux: LinuxConfig{
+			WindowCommand:     lookup(EnvLinuxWindowCommand),
+			InputMethod:       lookup(EnvLinuxInputMethod),
+			InputDevices:      splitList(lookup(EnvLinuxInputDevices)),
+			SSIDCommand:       lookup(EnvLinuxSSIDCommand),
+			ScreenshotMethod:  lookup(EnvLinuxScreenshotMethod),
+			ScreenshotCommand: lookup(EnvLinuxScreenshotCommand),
+		},
 	}, nil
+}
+
+// splitList はカンマ区切りの設定値を分ける。空の要素は落とす。
+func splitList(value string) []string {
+	var items []string
+	for item := range strings.SplitSeq(value, ",") {
+		if trimmed := strings.TrimSpace(item); trimmed != "" {
+			items = append(items, trimmed)
+		}
+	}
+	return items
 }
 
 // loadConfigFile は config.env を読む。

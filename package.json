@@ -12,6 +12,8 @@
     "go_install": "cd src/autolog && go install ./cmd/autolog",
     "vet": "cd src/autolog && go vet ./...",
     "vet_android": "cross-env CGO_ENABLED=0 GOOS=android GOARCH=arm64 npm run vet",
+    "vet_linux": "cross-env CGO_ENABLED=0 GOOS=linux GOARCH=amd64 npm run vet",
+    "vet_linux_arm": "cross-env CGO_ENABLED=0 GOOS=linux GOARCH=arm npm run vet",
     "verify_docs": "node src/tools/verify_docs.mjs",
     "clean_release": "rimraf release",
     "build_windows_amd64": "cross-env CGO_ENABLED=0 GOOS=windows GOARCH=amd64 node src/tools/build_go.mjs windows_amd64 autolog.exe",
@@ -25,7 +27,7 @@
     "release": "npm run clean_release && npm run build_x_compile && npm run verify_release_artifacts",
     "verify_release_artifacts": "node src/tools/verify_release_artifacts.mjs",
     "install_apk": "adb install -r -d release/android_apk/gkill_autolog.apk",
-    "test": "npm run verify_docs && npm run test_go && npm run test_chrome_ext",
+    "test": "npm run verify_docs && npm run vet_linux && npm run vet_linux_arm && npm run vet_android && npm run test_go && npm run test_chrome_ext",
     "test_go": "cd src/autolog && go test ./...",
     "test_chrome_ext": "node --test \"src/chrome_ext/*.test.mjs\""
   },

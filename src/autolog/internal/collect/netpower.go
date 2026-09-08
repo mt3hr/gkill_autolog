@@ -1,16 +1,14 @@
-//go:build windows
-
 package collect
+
+// 編集前に読む: .claude/skills/autolog-windows-collect/SKILL.md（この領域の不変条件の正本）
 
 import (
 	"context"
-	"errors"
 	"log/slog"
 	"slices"
 	"time"
 
 	"github.com/mt3hr/gkill_autolog/src/autolog/internal/rawlog"
-	"github.com/mt3hr/gkill_autolog/src/autolog/internal/winapi"
 )
 
 // pollInterval は Wi-Fi・Bluetooth・充電の状態を見に行く間隔。
@@ -32,13 +30,10 @@ type netPowerCollector struct {
 	emitter *Emitter
 	logger  *slog.Logger
 
-	// wifiPermissionWarned は位置情報の許可が無い旨の警告を一度だけ出すためのフラグ。
-	wifiPermissionWarned bool
-
 	// reobserve に入ると、次の観測は差分ではなく取り直しになる。スリープ復帰用。
 	reobserve chan struct{}
 
-	// 観測関数。テストで差し替えるため関数フィールドにしてある。
+	// 観測関数。プラットフォームごとの実装を受け取り、テストでも差し替える。
 	// 2つ目の戻り値が false のときは取得に失敗しており、状態は分からない。
 	ssidFn      func() (string, bool)
 	bluetoothFn func() ([]string, bool)
@@ -58,12 +53,15 @@ type netPowerCollector struct {
 	lastPollAt        time.Time
 }
 
-func newNetPowerCollector(emitter *Emitter, logger *slog.Logger) *netPowerCollector {
-	c := &netPowerCollector{emitter: emitter, logger: logger, reobserve: make(chan struct{}, 1)}
-	c.ssidFn = c.pollSSID
-	c.bluetoothFn = c.pollBluetooth
-	c.chargingFn = c.pollCharging
-	return c
+func newNetPowerCollector(emitter *Emitter, logger *slog.Logger, probes netPowerProbes) *netPowerCollector {
+	return &netPowerCollector{
+		emitter:     emitter,
+		logger:      logger,
+		reobserve:   make(chan struct{}, 1),
+		ssidFn:      probes.ssid,
+		bluetoothFn: probes.bluetooth,
+		chargingFn:  probes.charging,
+	}
 }
 
 // requestReobserve は接続状態の取り直しを求める。どのゴルーチンから呼んでもよい。
@@ -184,53 +182,6 @@ func (c *netPowerCollector) run(ctx context.Context) error {
 			c.poll(time.Now())
 		}
 	}
-}
-
-// pollSSID は現在の SSID を返す。
-// 2つ目の戻り値が false のときは取得に失敗しており、状態は分からない。
-func (c *netPowerCollector) pollSSID() (string, bool) {
-	ssid, ok, err := winapi.CurrentSSID()
-	switch {
-	case errors.Is(err, winapi.ErrWlanPermissionDenied):
-		if !c.wifiPermissionWarned {
-			c.wifiPermissionWarned = true
-			c.logger.Warn("位置情報が許可されていないため Wi-Fi の収集を行わない。" +
-				"設定 > プライバシーとセキュリティ > 位置情報 で" +
-				"「位置情報サービス」と「デスクトップ アプリが位置情報にアクセスできるようにする」を有効にすること")
-		}
-		return "", false
-	case err != nil:
-		c.logger.Warn("SSIDを取得できなかった", "error", err)
-		return "", false
-	case !ok:
-		// 取得はできて、つながっていないことが分かった。
-		return "", true
-	}
-	return ssid, true
-}
-
-// pollBluetooth は接続中の Bluetooth 機器名を返す。
-// 比較を安定させるため名前順に並べる。
-// 2つ目の戻り値が false のときは取得に失敗しており、状態は分からない。
-func (c *netPowerCollector) pollBluetooth() ([]string, bool) {
-	devices, err := winapi.ConnectedBluetoothDevices()
-	if err != nil {
-		c.logger.Warn("Bluetooth機器を列挙できなかった", "error", err)
-		return nil, false
-	}
-	slices.Sort(devices)
-	return devices, true
-}
-
-// pollCharging は充電中かを返す。
-// 2つ目の戻り値が false のときは取得に失敗しており、状態は分からない。
-func (c *netPowerCollector) pollCharging() (bool, bool) {
-	charging, err := winapi.IsCharging()
-	if err != nil {
-		c.logger.Warn("充電状態を取得できなかった", "error", err)
-		return false, false
-	}
-	return charging, true
 }
 
 func (c *netPowerCollector) emitWifi(now time.Time, ssid string, connected bool) {

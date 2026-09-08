@@ -104,12 +104,14 @@ Kyou の ID は提案から決定的に導く（後述）ので単純な二重�
 ロックはプロセスが死ねば OS が解放します。ロックファイルが残っていても
 次の起動を妨げないので、消す必要はありません。
 
-## internal/collect — Windows での収集
+## internal/collect — PC での収集
 
 `autolog collect` から4つのゴルーチンが動きます。
 書き出し役 (`emitter`)、前面ウィンドウ、セッション、ネットワーク・電源です。
 
-Windows 以外では「収集しない」実装になります (`run_other.go`)。
+収集のロジックは OS を知りません。どのコレクタを動かすかを
+`platform_windows.go` / `platform_linux.go` が決め、winapi / linuxapi と繋ぎます。
+どちらでもないプラットフォームでは「収集しない」実装になります (`platform_other.go`)。
 
 ### 収集も同時に1つしか動かない
 
@@ -192,6 +194,45 @@ cgo を使わず `golang.org/x/sys/windows` の LazyDLL で呼びます。
 - **コンソールは、自分だけがぶら下がっているときしか隠しません。**
   端末から手で起動したときに消えると困るためです
 
+## internal/linuxapi — Linux の収集
+
+`winapi` と対になります。cgo は使わず、D-Bus (`godbus`)、evdev、
+X11 (`xgb`) を純 Go で叩きます。
+
+**ビルドタグは `linux && !android`。** Go では `GOOS=android` が `linux` の
+ビルドタグも満たすため、`linux` だけで分けると Termux の `autolog` が
+収集を始めてしまいます。
+
+**解析・計算だけの部分にはビルドタグを付けません。** `GOOS=linux` のテストは
+クロスコンパイルでは実行できないので、タグを付けると Windows の開発機で
+一度も走らないコードになります。`.desktop` の解析、sysfs の判定、
+evdev のイベント分類、`GetImage` の帯分割はどれもタグ無しでテストしています。
+
+取れるものはデスクトップ環境ごとに違います。手段は起動時に一度だけ選び、
+選んだ手段をログへ1行出します。
+
+| 何を | どう取るか |
+| --- | --- |
+| 前面ウィンドウ | 設定コマンド → sway/i3 の IPC → Hyprland の IPC → X11 の `_NET_ACTIVE_WINDOW` |
+| アプリの表示名 | `.desktop` の `Name=`（ELF にはバージョン情報が無いため） |
+| 入力 | evdev (`/dev/input/event*`) → X11 の状態のポーリング |
+| セッション | systemd-logind と `org.freedesktop.ScreenSaver` |
+| Wi-Fi | NetworkManager → iwd → wpa_supplicant → コマンド |
+| Bluetooth | BlueZ の ObjectManager |
+| 充電 | `/sys/class/power_supply` → UPower |
+| 画面 | X11 の `GetImage` → 撮影コマンド (grim など) |
+
+**Wayland では XWayland の `_NET_ACTIVE_WINDOW` を使いません。**
+ネイティブの Wayland クライアントが前面のとき古い値を返し続けるので、
+「ずっと同じアプリを使っていた」という偽の記録になります。
+GNOME・KDE の Wayland には標準の手段が無いので、警告を出して
+アプリ利用だけを記録しません。
+
+**サスペンドの直前は logind の遅延インヒビタで少しだけ止めます。**
+`PrepareForSleep` を受けてそのまま返すと、書き出しの前に機械が眠り、
+接続区間を閉じるマーカーを失います。Windows の「5秒で殺される枠に
+3秒の待ちを収める」のと同じ考え方です。
+
 ## internal/shot — スクリーンショット
 
 ### 撮る時刻は「間隔で割った境目」
@@ -211,8 +252,11 @@ Android 側はアプリの設定画面で決めます。Android は `config.env`
 
 ### 撮って置くだけ
 
-全モニターを1回の `BitBlt` で1枚に収めます。モニターの配置が長方形にならない
-場合、隙間は黒のままです。WebP は可逆で、画質の設定はありません。
+全モニターを1枚に収めます。Windows は1回の `BitBlt`、Linux の X11 は
+root ウィンドウを `GetImage` で（応答の上限を超えるので横帯に分けて）読みます。
+Wayland には画面を読む標準の手段が無いので、`grim` などのコマンドに
+撮らせて PNG を読みます。モニターの配置が長方形にならない場合、隙間は黒のままです。
+WebP は可逆で、画質の設定はありません。
 
 ファイル名は `<端末名>_YYYY-MM-DD_HH-mm-ss.webp`。秒まで入っているので、
 1時間未満の間隔でも衝突しません。置き場は日付で分けずフラットです。
@@ -222,6 +266,11 @@ Android 側はアプリの設定画面で決めます。Android は `config.env`
 既にあるファイルは上書きしません。ここが崩れると撮り逃しになります。
 
 ロック中は撮りません。撮り逃した時間の画像を後から作ることもしません。
+
+ロックの判定は Windows が `OpenInputDesktop`、Linux は logind の `LockedHint` と
+`org.freedesktop.ScreenSaver` です。Linux でどちらも分からないときは撮ります。
+ロック画面を撮っても漏れるのはロック画面そのものですが、撮らない側に倒すと
+撮影が丸ごと止まるためです。
 
 ### 保存後に更新時刻を撮影時刻へ合わせる
 
