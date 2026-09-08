@@ -27,6 +27,7 @@ gkill_autolog の不変条件の多くは「例外もエラーも出さずに静
 | `src/autolog/internal/rawlog/**`・`internal/normalize/**`・`internal/ledger/**`・`internal/inbox/**`・`cmd/autolog/cmd_import.go` | [autolog-pipeline](.claude/skills/autolog-pipeline/SKILL.md) | 低水位マーク `CursorBackfill` を外すと、後から届いた区間イベント（Android のアプリ利用・再生、拡張が溜めた閲覧）を import が二度と読まず**恒久に取りこぼす**／`AdvanceCursorChecked` の「読み残し検査→マーク削除→カーソル前進」を別々の文へ割ると、遅着の検出と消費済みマークの削除が打ち消し合って同じ取りこぼしが出る／`MaxRowID` を `Range` の後に取ると挿入分が「読んだ範囲の中」扱いになり検査から漏れる／`makeID` から端末名を落とすと、別端末の同じ `event_id` の提案が台帳突合で**エラーも出さず落ちる**／受け付けなかった行がある JSONL を消すと、その生ログが恒久に失われる |
 | `src/autolog/internal/gkillclient/**` | [autolog-gkill-api](.claude/skills/autolog-gkill-api/SKILL.md) | ステータスで打ち切って本文の `errors` を読み落とし、再ログインも回数制限の検出も効かなくなる／失敗を成功扱いして台帳へ載せ**二度とやり直されなくなる**／`add_urlog` を1秒1件へ抑えないと、サーバ側が1件ごとに対象URLを取りに行くので大量の外向きフェッチが出る／提案ごとに再ログインすると IP ごと15分10回の枠を使い潰し、その端末の取り込みが全滅する／`update_user_reps` を手で叩くと全件置換で既存 rep が消える |
 | `src/autolog/internal/collect/**`・`internal/winapi/**`・`internal/shot/**`・`internal/proclock/**`・`cmd/autolog/cmd_collect.go` | [autolog-windows-collect](.claude/skills/autolog-windows-collect/SKILL.md) | SSID は位置情報の許可が無いと `ERROR_ACCESS_DENIED` を返し**例外も立てず空**になる／Bluetooth を `fConnected` で判定すると BLE の機器（マウス・キーボード）が丸ごと出ない／停止時の書き出しのロック待ちを3秒より延ばすと、Windows が5秒でプロセスを殺すので `collector_stop` と直前の入力が1件も残らない／ロックを外すと2個目の collect が偽の recovered lock を書いて稼働中の利用セッションを分断する／スクリーンショットの mtime を撮影時刻へ合わせ忘れると、IDF が取り込み時刻を記録時刻にする |
+| `src/autolog/internal/linuxapi/**`・`internal/collect/platform_linux.go`・`internal/shot/capture_linux.go`・`src/scripts/linux/**` | [autolog-linux-collect](.claude/skills/autolog-linux-collect/SKILL.md) | `//go:build linux` は Android にも入るので、`&& !android` を書き忘れると **Termux の autolog が収集を始める**／セッションの監視を D-Bus が無いときに起動しないと `collector_start`／`collector_stop` が消え、接続区間が永久に閉じない／logind の遅延インヒビタを取らないとサスペンド直前の書き出しが落ちる／ウィンドウを取れないのに入力だけ記録すると、TimeIs のタイトルがウィンドウタイトルになる／Wayland で XWayland の `_NET_ACTIVE_WINDOW` を見ると「ずっと同じアプリ」という**偽の記録**になる／`/proc/bus/input/devices` で選別しないと電源ボタンが偽の操作になる |
 | `src/chrome_ext/**`・`src/autolog/internal/ingest/**` | [autolog-chrome-ext](.claude/skills/autolog-chrome-ext/SKILL.md) | ロックの中から `withState` を呼ぶと**デッドロックして以後の収集が丸ごと止まる**（入口だけでロックを取る規約。例外は `removeFromQueue`）／区間を消してからイベントを積む順にすると、その間に Service Worker が止まったとき区間ごと失われる／4xx で件数を半分に絞る処理を外すと、不正な1件のせいでキューが永久に詰まる／再生の区間を広告でも切ると、1本の視聴が広告のたびに分断されて同じ動画の URLog が広告の数だけできる／受け口を 127.0.0.1 以外へ bind するとトークンだけが防御になる |
 | `src/android/**`・`src/autolog/internal/config/timezone_android.go` | [autolog-android](.claude/skills/autolog-android/SKILL.md) | 書き出しファイル名が衝突すると `renameTo` が**黙って上書き**し、端末側から削除済みの生ログが失われる／`onUpgrade` でテーブルを作り直すと、GPX は毎回全点から作り直すため**当日分の軌跡が短くなって消える**／記録種別の既定値を false にすると、更新した時点でそれまで記録できていたものが黙って止まる／「端末の利用」に切り替えを置くと、区間を閉じる土台が消えてアプリ利用も再生も閉じられなくなる／マイク種別を位置情報と同じ形で `startForeground` に足すと、再起動のたびに失敗して `stopSelf` へ落ち収集が丸ごと止まる／再生の区間の終わりに `now` を使うと、一時停止していた時間がそのまま TimeIs の長さになる／`time.Local` は UTC 固定なので記録時刻が全部 +00:00 になり、文字列で並べ替える以上あとから直しにくい壊れ方をする |
 | `src/scripts/**` | [autolog-powershell](.claude/skills/autolog-powershell/SKILL.md) | BOM なしで保存すると 5.1 が Shift_JIS と誤読し、日本語コメントの2バイト目が改行を飲んで**次の行が黙って消える**／`-File` 起動では param ブロックの `$PSScriptRoot` が空になり、タスクスケジューラからだけ落ちる／`2>&1` した native の stderr が終了エラーになり、成功しているのに失敗扱いになる／`$CutoffLagMinutes`（2分）は `cmd_import.go` の `untilNowCutoffLag` と**二重持ち**で、片方だけ変えると結合待ちの窓がずれる |
@@ -46,6 +47,9 @@ gkill_autolog の不変条件の多くは「例外もエラーも出さずに静
 | SSID が空になる／Bluetooth 機器が1つも出ない | autolog-windows-collect |
 | ログオフ・コンソールを閉じると最後の記録が消える | autolog-windows-collect |
 | collect を2つ起動したら利用セッションが切れ切れになった | autolog-windows-collect |
+| Linux で何も記録されない／`collect` が即終わる | autolog-linux-collect |
+| Wayland でアプリ利用だけ記録されない | autolog-linux-collect |
+| Android の更新後に Termux で収集が始まった | autolog-linux-collect（`linux && !android`） |
 | Chrome の閲覧・再生が送られてこない／キューが減らない | autolog-chrome-ext |
 | 拡張が固まる／以後どのイベントも送られない | autolog-chrome-ext（`withState` のデッドロック） |
 | Android が更新後に何も記録しなくなった | autolog-android（記録種別の既定値） |
@@ -63,10 +67,12 @@ gkill_autolog の不変条件の多くは「例外もエラーも出さずに静
 | `npm test` | `verify_docs` → Go テスト → Chrome 拡張テスト |
 | `npm run verify_docs` | 資料の機械検査（入口サイズ・スキル索引・リンク・件数・個人情報 ほか）。`--list` で実測値 |
 | `npm run build` | Windows 向けにビルド（`release/windows_amd64/autolog.exe` を出す） |
+| `npm run build_linux_amd64` | Linux (amd64) 向けにビルド |
 | `npm run build_android_arm64` | Android (arm64) 向けにビルド |
 | `npm run build_android_apk` | 収集アプリの APK を作る |
 | `npm run release` | 全プラットフォーム向けにビルドして成果物を検査 |
 | `cd src\autolog && go test ./...` | Go のテスト |
+| `npm run vet_linux` / `npm run vet_android` | 別プラットフォーム向けの型検査（ビルドタグの抜けを捕まえる） |
 | `npm run test_chrome_ext` | Chrome 拡張のテスト（Node 標準ランナー + chrome スタブ） |
 | `cd src\android && .\gradlew.bat --% assembleDebug -PversionName=X -PversionCode=N` | APK |
 | `.\src\scripts\check_connection.ps1` | gkill へ繋がるか確認（書き込まない） |
@@ -112,7 +118,7 @@ gkill 本体と同じく、実装は `src/` の下、資料は `documents/revers
 
 ### パッケージ
 
-`rawlog`（生ログ）/ `collect`（Windows 収集）/ `winapi` / `shot` /
+`rawlog`（生ログ）/ `collect`（PC 収集）/ `winapi` / `linuxapi` / `shot` /
 `ingest`（Chrome の受け口）/ `inbox`（Android の受け口）/
 `normalize`（**中核**）/ `gkillclient` / `ledger` / `config` /
 `proclock`（多重起動防止のファイルロック）

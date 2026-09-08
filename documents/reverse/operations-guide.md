@@ -165,6 +165,83 @@ gkill_server dvnf move '$LOCALAPPDATA/gkill_autolog/screenshots/*.webp' AutoScre
 gkill_server idf (gkill_server dvnf get AutoScreenshot)
 ```
 
+## PC (Linux) の導入
+
+Windows と同じものを収集します。取れるものはデスクトップ環境によって違い、
+取れないものは起動時に警告が出ます。
+
+### 設定ファイル
+
+`src/scripts/autolog.env.example` を `autolog.env` としてコピーして値を埋めます。
+Windows と同じ項目に加えて、必要なら次を足します。どれも既定は空で、
+空なら環境から手段を導きます。
+
+```
+AUTOLOG_USAGE_TITLE=Linux利用
+
+# GNOME・KDE の Wayland では前面ウィンドウを取る標準の手段が無い。
+# 前面ウィンドウを1行の JSON で出すコマンドを与えると記録できる。
+# {"app_name":"...","app_display_name":"...","window_title":"...","pid":123}
+AUTOLOG_LINUX_WINDOW_COMMAND=
+
+# 入力の観測手段。auto / evdev / x11 / none
+AUTOLOG_LINUX_INPUT_METHOD=auto
+
+# 撮影の手段。auto / x11 / command / portal
+AUTOLOG_LINUX_SCREENSHOT_METHOD=auto
+# 画面を撮って {} のパスへ書くコマンド。{} が無ければ標準出力から読む。
+AUTOLOG_LINUX_SCREENSHOT_COMMAND=
+```
+
+### 入力を読む権限
+
+操作（クリック・ホイール・キー入力）の観測には `/dev/input/event*` を読む権限が要ります。
+
+```bash
+sudo usermod -aG input "$USER"
+```
+
+入り直すと効きます。入れない場合、X11 なら画面の状態を見る方法へ退避しますが、
+**ホイールだけの操作を取りこぼします**（スクロールだけでページを読んだ時間が
+「操作が無かった」ことになります）。Wayland では退避手段が無いので、
+アプリ利用は記録されません。
+
+### Wayland で撮る
+
+Wayland にはクライアントから画面を読む標準の手段がありません。
+`grim`（wlroots 系）・`spectacle`（KDE）・`gnome-screenshot`（GNOME）が
+PATH にあれば自動で使います。無ければ `AUTOLOG_LINUX_SCREENSHOT_COMMAND` を設定します。
+
+### ビルドと確認
+
+```bash
+npm run build_linux_amd64
+./src/scripts/linux/run_import.sh --dry-run --until-now
+```
+
+### 常駐と定期実行
+
+```bash
+./src/scripts/linux/install_units.sh --dry-run   # 内容の確認
+./src/scripts/linux/install_units.sh
+./src/scripts/linux/install_units.sh --uninstall # 消すとき
+```
+
+`gkill-autolog-collect.service`（ログイン時に常駐）と
+`gkill-autolog-import.timer`（毎日 4:00）が作られます。管理者権限は要りません。
+
+収集はシステムのサービスではなく**ユーザーのユニット**にします。
+前面ウィンドウとセッションの状態は、画面付きのログインセッションに
+属するプロセスからしか取れません。
+
+```bash
+systemctl --user status gkill-autolog-collect.service
+journalctl --user -u gkill-autolog-collect.service -f
+```
+
+起動直後のログに、どの手段が選ばれたかと、取れないものの警告が出ます。
+同期スクリプトから取り込みを呼んでいるなら、タイマーは要りません。
+
 ## Chrome 拡張
 
 `chrome://extensions` を開き、デベロッパーモードで `src/chrome_ext` を読み込みます。
@@ -627,6 +704,20 @@ Broadcast completed: result=12, data="12 件を書き出した"
 `TERMUX_APP__AM_SOCKET_SERVER_ENABLED` も export されないので、`termux.properties` で有効にすることもできません。
 Android 17 の端末で確認しています。この場合は `/system/bin/am` を使ってください。
 `--user 0` さえ付ければ順序付きブロードキャストも結果待ちも問題なく動きます。
+
+### 何も記録されない (Linux)
+
+`autolog collect` の起動直後のログを見ます。次のどれかが出ています。
+
+| 出ているもの | 意味 |
+| --- | --- |
+| 画面付きのログインセッションではないため操作ログを収集しない | `DISPLAY` も `WAYLAND_DISPLAY` も無い。ユーザーのユニットから起動しているか確かめる |
+| 前面ウィンドウを取れないため、アプリ利用を記録しない | GNOME・KDE の Wayland。`AUTOLOG_LINUX_WINDOW_COMMAND` を設定する |
+| `/dev/input` を読めない | `sudo usermod -aG input $USER` して入り直す |
+| Wi-Fi・Bluetooth・充電のどれも観測できない | D-Bus に繋がっていない。`systemctl --user` から起動しているか確かめる |
+
+セッションの記録（端末利用TimeIs）は D-Bus が1本も無くても出ます。
+これが出ていない場合は収集そのものが起動していません。
 
 ### Wi-Fi の TimeIs が出ない (Windows)
 

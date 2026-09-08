@@ -8,7 +8,7 @@
 | Go の CLI | Go 1.26 以上 |
 | Android アプリ | JDK 17、Android SDK (compileSdk 37。minSdk 26 / targetSdk 36) |
 | Chrome 拡張 | なし（そのまま読み込める。テストは Node の標準ランナー） |
-| スクリプト | Windows PowerShell 5.1 または PowerShell 7 |
+| スクリプト | Windows PowerShell 5.1 または PowerShell 7（Linux は POSIX sh と systemd） |
 | 端末別ユーザーの作成 | PATH に通った `sqlite3` |
 
 **最初に一度 `npm install` を実行してください。** ビルドの npm スクリプトは
@@ -33,6 +33,29 @@ npm run build
 cd src\autolog
 go build -o ..\..\release\windows_amd64\autolog.exe .\cmd\autolog
 ```
+
+### Linux 向け
+
+```powershell
+npm run build_linux_amd64
+npm run build_linux_arm64
+npm run build_linux_arm
+```
+
+`release/linux_amd64/autolog` などができます。
+
+型検査だけなら実機は要りません。**ビルドタグの抜けはこれでしか捕まりません。**
+
+```powershell
+npm run vet_linux       # Linux (amd64)
+npm run vet_linux_arm   # Linux (arm)。32bit の input_event の仮定を確かめる
+npm run vet_android     # linux && !android の抜けを捕まえる
+```
+
+`GOOS=linux go test` はクロスコンパイルしたテストを実行できません。
+そのため `linuxapi` の解析・計算だけの部分にはビルドタグを付けておらず、
+この機械の `go test ./...` でそのまま走ります。
+D-Bus・evdev・X11 を叩く部分は実機で確かめます。
 
 ### Android (arm64) 向け
 

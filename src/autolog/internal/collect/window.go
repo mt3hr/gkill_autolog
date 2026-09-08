@@ -1,6 +1,6 @@
-//go:build windows
-
 package collect
+
+// 編集前に読む: .claude/skills/autolog-windows-collect/SKILL.md（この領域の不変条件の正本）
 
 import (
 	"context"
@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/mt3hr/gkill_autolog/src/autolog/internal/rawlog"
-	"github.com/mt3hr/gkill_autolog/src/autolog/internal/winapi"
 )
 
 const (
@@ -25,22 +24,27 @@ const (
 // windowCollector は操作を伴うアクティブウィンドウを記録する。
 //
 // 記録する入力はクリック・ホイール・キー入力だけで、マウス移動は含めない（要件 §6.2）。
-// 入力の検出は低レベルフック、ウィンドウの取得は 1 秒ごとのサンプリングで行う。
-type windowCollector struct {
-	emitter *Emitter
-	logger  *slog.Logger
+// 入力の検出はフック、ウィンドウの取得は 1 秒ごとのサンプリングで行う。
+//
+// 入力とウィンドウの**両方**が観測できるときだけ起動すること。
+// アプリ名が空の入力イベントを溜めると、normalize の segmentTitle が
+// ウィンドウタイトルへフォールバックし、要件 §6.4 が禁じている
+// 「ウィンドウタイトルが TimeIs のタイトルになる」状態を量産する。
+type windowCollector[K ~string] struct {
+	emitter    *Emitter
+	logger     *slog.Logger
+	hook       eventSource[K]
+	foreground foregroundWindowFunc
 }
 
-func newWindowCollector(emitter *Emitter, logger *slog.Logger) *windowCollector {
-	return &windowCollector{emitter: emitter, logger: logger}
+func newWindowCollector[K ~string](emitter *Emitter, logger *slog.Logger, hook eventSource[K], foreground foregroundWindowFunc) *windowCollector[K] {
+	return &windowCollector[K]{emitter: emitter, logger: logger, hook: hook, foreground: foreground}
 }
 
-func (c *windowCollector) run(ctx context.Context) error {
-	hook := winapi.NewInputHook()
-
+func (c *windowCollector[K]) run(ctx context.Context) error {
 	hookDone := make(chan error, 1)
 	go func() {
-		hookDone <- hook.Run(ctx)
+		hookDone <- c.hook.Run(ctx)
 	}()
 
 	ticker := time.NewTicker(windowSampleInterval)
@@ -49,7 +53,7 @@ func (c *windowCollector) run(ctx context.Context) error {
 	var (
 		// 直近のサンプリング間隔で入力があったか。
 		sawInput bool
-		lastKind winapi.InputKind
+		lastKind K
 
 		// いま記録しているウィンドウと、そこで最後に入力があった時刻。
 		currentApp     string
@@ -90,7 +94,7 @@ func (c *windowCollector) run(ctx context.Context) error {
 		case err := <-hookDone:
 			return err
 
-		case kind, ok := <-hook.Events():
+		case kind, ok := <-c.hook.Events():
 			if !ok {
 				return <-hookDone
 			}
@@ -103,7 +107,7 @@ func (c *windowCollector) run(ctx context.Context) error {
 			}
 			sawInput = false
 
-			info, ok, err := winapi.GetForegroundWindow()
+			info, ok, err := c.foreground()
 			if err != nil {
 				c.logger.Warn("前面ウィンドウを取得できなかった", "error", err)
 				continue

@@ -1,6 +1,6 @@
-//go:build windows
-
 package collect
+
+// 編集前に読む: .claude/skills/autolog-windows-collect/SKILL.md（この領域の不変条件の正本）
 
 import (
 	"context"
@@ -9,29 +9,32 @@ import (
 	"time"
 
 	"github.com/mt3hr/gkill_autolog/src/autolog/internal/rawlog"
-	"github.com/mt3hr/gkill_autolog/src/autolog/internal/winapi"
 )
 
 // sessionCollector はロック・解除・ログオン・ログオフ・電源の変化を記録する。
-type sessionCollector struct {
+//
+// 観測できるものが1つも無い環境でも起動すること。collector_start と
+// collector_stop は normalize が「観測の切れ目」として使う唯一のマーカーで
+// （internal/normalize/state.go）、これが出ないと Wi-Fi・Bluetooth・充電の
+// 開いた区間が永久に閉じず、電源が入っていなかった時間までつながる。
+type sessionCollector[K ~string] struct {
 	emitter *Emitter
 	logger  *slog.Logger
+	watcher eventSource[K]
 
 	// onResume はスリープ復帰を観測したときに呼ぶ。run より前に設定すること。
 	// 接続の収集 (netPowerCollector) が suspend で閉じた区間を取り直すために使う。
 	onResume func()
 }
 
-func newSessionCollector(emitter *Emitter, logger *slog.Logger) *sessionCollector {
-	return &sessionCollector{emitter: emitter, logger: logger}
+func newSessionCollector[K ~string](emitter *Emitter, logger *slog.Logger, watcher eventSource[K]) *sessionCollector[K] {
+	return &sessionCollector[K]{emitter: emitter, logger: logger, watcher: watcher}
 }
 
-func (c *sessionCollector) run(ctx context.Context) error {
-	watcher := winapi.NewSessionWatcher()
-
+func (c *sessionCollector[K]) run(ctx context.Context) error {
 	watcherDone := make(chan error, 1)
 	go func() {
-		watcherDone <- watcher.Run(ctx)
+		watcherDone <- c.watcher.Run(ctx)
 	}()
 
 	c.emitter.Emit(rawlog.EventSession, time.Now(), nil, rawlog.SessionPayload{
@@ -50,7 +53,7 @@ func (c *sessionCollector) run(ctx context.Context) error {
 		case err := <-watcherDone:
 			return err
 
-		case kind, ok := <-watcher.Events():
+		case kind, ok := <-c.watcher.Events():
 			if !ok {
 				return <-watcherDone
 			}
@@ -67,22 +70,17 @@ func (c *sessionCollector) run(ctx context.Context) error {
 	}
 }
 
-func mapSessionAction(kind winapi.SessionEventKind) (rawlog.SessionAction, bool) {
-	switch kind {
-	case winapi.SessionLogon:
-		return rawlog.SessionLogon, true
-	case winapi.SessionUnlock:
-		return rawlog.SessionUnlock, true
-	case winapi.SessionLock:
-		return rawlog.SessionLock, true
-	case winapi.SessionLogoff:
-		return rawlog.SessionLogoff, true
-	case winapi.SessionShutdown:
-		return rawlog.SessionShutdown, true
-	case winapi.SessionSuspend:
-		return rawlog.SessionSuspend, true
-	case winapi.SessionResume:
-		return rawlog.SessionResume, true
+// mapSessionAction は観測した種別を生ログの記録種別へ写す。
+//
+// winapi・linuxapi の列挙はどちらも rawlog.SessionAction と同じ文字列を使う。
+// 知らない種別は false を返して捨てる。収集側が増えた種別を、
+// 取り込み側が知らないまま記録してしまうのを防ぐ。
+func mapSessionAction[K ~string](kind K) (rawlog.SessionAction, bool) {
+	action := rawlog.SessionAction(kind)
+	switch action {
+	case rawlog.SessionLogon, rawlog.SessionUnlock, rawlog.SessionLock,
+		rawlog.SessionLogoff, rawlog.SessionShutdown, rawlog.SessionSuspend, rawlog.SessionResume:
+		return action, true
 	default:
 		return "", false
 	}

@@ -65,7 +65,7 @@ Android      収集アプリ ─→ 生ログ ─→ 整理 ─→ その端末�
 
 | 対象 | 必要なもの |
 | --- | --- |
-| PC | Windows、Go 1.26 以上と Node.js 20 以上（ビルド時） |
+| PC | Windows または Linux、Go 1.26 以上と Node.js 20 以上（ビルド時） |
 | Android | Termux で動かしている gkill、JDK 17 と Android SDK（ビルド時） |
 | Chrome | なし |
 

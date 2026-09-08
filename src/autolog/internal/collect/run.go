@@ -1,6 +1,6 @@
-//go:build windows
-
 package collect
+
+// 編集前に読む: .claude/skills/autolog-windows-collect/SKILL.md（この領域の不変条件の正本）
 
 import (
 	"context"
@@ -11,20 +11,31 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-// Run は常駐して Windows の操作ログを収集する。ctx が終わるまで返らない。
+// Run は常駐して端末の操作ログを収集する。ctx が終わるまで返らない。
 //
 // 収集するもの:
 //   - 操作を伴うアクティブウィンドウ（クリック・ホイール・キー入力のみ）
 //   - ロック・解除・ログオン・ログオフ・電源
 //   - Wi-Fi・Bluetooth・充電の接続状態
 //
+// 何をどう観測するかは platform_*.go が決める。この関数は
+// 「どのコレクタを回すか」を受け取って回すだけで、OS を知らない。
+//
 // Chrome 拡張と Android からの受信は ingest パッケージが担当する。
-func Run(ctx context.Context, store *rawlog.Store, device rawlog.Device, logger *slog.Logger) error {
-	if err := validateDevice(device); err != nil {
+func Run(ctx context.Context, store *rawlog.Store, opts Options, logger *slog.Logger) error {
+	if err := validateDevice(opts.Device); err != nil {
 		return err
 	}
 
-	emitter := NewEmitter(store, device, logger)
+	emitter := NewEmitter(store, opts.Device, logger)
+
+	// プラットフォームの判定を recoverUnfinishedSession より先に行う。
+	// 逆にすると、収集できない環境 (Android・macOS) の autolog collect が
+	// 偽の recovered lock を1件書いてからエラー終了する。
+	collectorFns, err := newPlatformCollectors(emitter, opts, logger)
+	if err != nil {
+		return err
+	}
 
 	// 前回が異常終了していれば、先に未終了セッションを閉じておく。
 	if err := recoverUnfinishedSession(ctx, store, emitter, logger); err != nil {
@@ -43,28 +54,16 @@ func Run(ctx context.Context, store *rawlog.Store, device rawlog.Device, logger 
 		emitterDone <- emitter.Run(emitterCtx)
 	}()
 
-	// スリープ復帰をセッションの収集から接続の収集へ伝える。
-	// suspend で normalize が接続区間を閉じるため、復帰後は状態を取り直して
-	// 「つながっているもの」を記録し直す必要がある。ポーリング間隔からの
-	// 自前検知 (sleepGapThreshold) では30秒未満のスリープを取りこぼす。
-	netPower := newNetPowerCollector(emitter, logger)
-	session := newSessionCollector(emitter, logger)
-	session.onResume = netPower.requestReobserve
-
 	collectors, collectorsCtx := errgroup.WithContext(ctx)
-	collectors.Go(func() error {
-		return newWindowCollector(emitter, logger).run(collectorsCtx)
-	})
-	collectors.Go(func() error {
-		return session.run(collectorsCtx)
-	})
-	collectors.Go(func() error {
-		return netPower.run(collectorsCtx)
-	})
+	for _, fn := range collectorFns {
+		collectors.Go(func() error {
+			return fn(collectorsCtx)
+		})
+	}
 
-	logger.Info("収集を開始した", "device", device, "raw_db", store.Path())
+	logger.Info("収集を開始した", "device", opts.Device, "raw_db", store.Path())
 
-	err := collectors.Wait()
+	err = collectors.Wait()
 	stopEmitter()
 	if emitterErr := <-emitterDone; emitterErr != nil && !errors.Is(emitterErr, context.Canceled) {
 		err = errors.Join(err, emitterErr)

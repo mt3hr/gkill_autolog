@@ -1,0 +1,10 @@
+[Unit]
+Description=gkill_autolog import (毎日 4:00)
+
+[Timer]
+OnCalendar=*-*-* 04:00:00
+# 機械が止まっていて逃した回は起動後に走らせる。
+Persistent=true
+
+[Install]
+WantedBy=timers.target

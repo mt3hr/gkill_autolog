@@ -1,0 +1,8 @@
+[Unit]
+# gkill_autolog の取り込み。タイマーから呼ばれる。
+Description=gkill_autolog import
+
+[Service]
+Type=oneshot
+# install_units.sh がこのリポジトリの実際の場所へ書き換えて置く。
+ExecStart=%h/Git/gkill_autolog/src/scripts/linux/run_import.sh

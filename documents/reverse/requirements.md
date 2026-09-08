@@ -12,14 +12,14 @@
 
 ## 1. 目的
 
-Windows、AndroidおよびChromeから客観的な操作ログを自動収集し、決定的なルールで必要な粒度へ整理したうえで、その端末のgkillへKyouとして記録する。
+PC（Windows / Linux）、AndroidおよびChromeから客観的な操作ログを自動収集し、決定的なルールで必要な粒度へ整理したうえで、その端末のgkillへKyouとして記録する。
 
 利用者の目的、感情、集中状態、活動内容などは推測しない。行うのは、生ログの整理、重複や不要イベントの除外、gkill向けデータへの変換に限定する。
 
 ## 2. 全体構成
 
 ```text
-Windows収集プログラム
+PC収集プログラム（Windows / Linux）
 Android収集アプリ
 Chrome拡張
 スクリーンショット収集
@@ -59,7 +59,7 @@ RepNameをコードへ固定しない。
 
 対象端末：
 
-* PC（Windows）
+* PC（Windows / Linux）
 * Android 端末
 
 以降、PC 側の端末名を `Laptop`、Android 側を `Phone` と書く。
@@ -98,7 +98,7 @@ TimeIs、URLog、Kmemo、IDFなどのデータ型は、既存のgkill構成に�
 
 元のタイトル、URL、通知内容などは加工前の値を生ログに保持する。
 
-## 6. Windows操作ログ
+## 6. PC操作ログ（Windows / Linux）
 
 ### 6.1 PC利用TimeIs
 
@@ -337,7 +337,7 @@ URLの代わりを埋め合わせることはしない。
 
 WindowsとAndroidの再生履歴は統合しない。
 
-## 9. Windowsネットワーク・Bluetooth・充電
+## 9. PCネットワーク・Bluetooth・充電（Windows / Linux）
 
 ### 9.1 Wi-Fi
 
@@ -367,13 +367,13 @@ Bluetooth機器名単位の接続期間をTimeIs化する。
 * 開始・終了時のバッテリー残量は記録しない
 * 急速、USB、ワイヤレスなどの方式は区別しない
 
-## 10. Windowsスクリーンショット
+## 10. PCスクリーンショット（Windows / Linux）
 
 * 決まった間隔で撮影。既定は1時間（毎時00分）
 * 撮影間隔は `AUTOLOG_SCREENSHOT_INTERVAL` またはフラグ `--screenshot-interval` で変えられる
 * 撮影時刻は間隔で丸める。15分なら毎時00分・15分・30分・45分
 * 撮影間隔は10秒〜24時間の範囲へ丸める
-* Windowsロック中は撮影しない
+* ロック中は撮影しない
 * スリープ中は撮影しない
 * 撮影できなかった時間の画像を後から補完しない
 * 全モニターを結合した1枚の画像
@@ -533,6 +533,8 @@ Windows側と同じKyou変換規則を使用する。
 * Windows — タスクスケジューラの `gkill_autolog_import`（毎日午前4時）、
   または gkill の同期スクリプトから `run_import.ps1` を呼ぶ。
   同期スクリプトから呼んでいるなら定期実行のタスクは要らない
+* Linux — systemd のユーザータイマー `gkill-autolog-import.timer`（毎日午前4時）、
+  または同期スクリプトから `run_import.sh` を呼ぶ
 * Android — Termux の取り込みスクリプト
 
 上限時刻の既定は直近の午前4時。同期スクリプトから呼ぶときは
@@ -606,9 +608,9 @@ Windows側と同じKyou変換規則を使用する。
 
 次のデータが自動収集され、既存のgkill構成に従って正しいKyouとして書き込まれること。
 
-### Windows
+### Windows / Linux
 
-* Windows利用TimeIs
+* 端末利用TimeIs
 * 操作したアプリ・ウィンドウのTimeIs
 * Chrome閲覧URLog
 * 動画・音楽再生TimeIs（URLを確定できたものはURLogも）
@@ -616,6 +618,18 @@ Windows側と同じKyou変換規則を使用する。
 * Bluetooth TimeIs
 * 充電TimeIs
 * 毎時スクリーンショットIDF
+
+Linux では環境によって取れないものがある。取れないことは起動時に警告し、
+取れるものだけを記録する。**取れないものを黙って空として扱わない。**
+
+* ログイン・ログアウトは記録しない。端末利用TimeIsの開始と終了は
+  収集プログラムの起動・停止（`collector_start` / `collector_stop`）で決まる
+* GNOME・KDE の Wayland には前面ウィンドウを取る標準の手段が無い。
+  設定 (`AUTOLOG_LINUX_WINDOW_COMMAND`) でコマンドを与えない限り、
+  操作したアプリのTimeIsは記録されない
+* 入力の観測には `/dev/input` を読む権限（input グループ）が要る。
+  無い場合は X11 の状態のポーリングへ退避するが、ホイールだけの操作を取りこぼす
+* 電源の情報を持たない据え置き機では充電TimeIsを記録しない
 
 ### Android
 

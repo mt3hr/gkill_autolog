@@ -30,7 +30,7 @@ func newCollectCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "collect",
 		Short: "常駐して操作ログを収集する",
-		Long: "常駐して Windows の操作ログを収集する。\n" +
+		Long: "常駐して端末の操作ログを収集する（Windows / Linux）。\n" +
 			"Ctrl-C またはログオフで停止し、停止時にはセッション終了を生ログへ記録する。",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cfg, err := config.Load()
@@ -96,7 +96,25 @@ func newCollectCmd() *cobra.Command {
 
 			group, groupCtx := errgroup.WithContext(ctx)
 			group.Go(func() error {
-				return collect.Run(groupCtx, store, cfg.Device, logger)
+				err := collect.Run(groupCtx, store, collect.Options{
+					Device: cfg.Device,
+					Linux: collect.LinuxOptions{
+						WindowCommand: cfg.Linux.WindowCommand,
+						InputMethod:   cfg.Linux.InputMethod,
+						InputDevices:  cfg.Linux.InputDevices,
+						SSIDCommand:   cfg.Linux.SSIDCommand,
+					},
+				}, logger)
+				if errors.Is(err, collect.ErrUnsupportedPlatform) {
+					// 操作ログの収集はできないが、Chrome 拡張の受け口と定期撮影は
+					// このプロセスの役目で、収集とは独立に動く。
+					// ここで errgroup を畳むと受け口ごと落ちる。
+					logger.Warn("この環境では操作ログを収集しない。Chrome の受け口と定期撮影は続ける",
+						"error", err)
+					<-groupCtx.Done()
+					return nil
+				}
+				return err
 			})
 			if noScreenshot {
 				logger.Info("スクリーンショットの定期撮影を行わない")

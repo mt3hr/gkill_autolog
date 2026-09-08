@@ -21,7 +21,7 @@
 | [`autolog/`](autolog/) | Go の CLI。収集と取り込み。`go.mod` はここ |
 | [`android/`](android/) | Android の収集アプリ。集めて共有ストレージへ書き出すだけ |
 | [`chrome_ext/`](chrome_ext/) | Chrome 拡張 (Manifest V3)。閲覧と再生を送る |
-| [`scripts/`](scripts/) | PowerShell スクリプト。設定・取り込みの起動・切り分け |
+| [`scripts/`](scripts/) | PowerShell スクリプト。設定・取り込みの起動・切り分け。`linux/` に sh と systemd のユニット |
 | [`tools/`](tools/) | ビルドの小物 (Node)。npm スクリプトから呼ばれる |
 
 ## autolog のパッケージ
@@ -29,8 +29,9 @@
 | パッケージ | 責務 |
 | --- | --- |
 | `rawlog` | 生ログ。追記専用 SQLite とイベントの型 |
-| `collect` | Windows での収集 |
+| `collect` | PC での収集。OS 依存は `platform_*.go` だけ |
 | `winapi` | Win32 API のラッパ |
+| `linuxapi` | Linux の収集 (D-Bus・evdev・X11)。解析だけの部分はビルドタグ無し |
 | `shot` | スクリーンショットの撮影と WebP 変換 |
 | `ingest` | Chrome の受け口 (HTTP)。拡張から閲覧・再生を受け取る |
 | `inbox` | Android の受け口。収集アプリが置いた JSONL の取り込み |
@@ -44,9 +45,12 @@
 
 ```powershell
 npm run build                # Windows (amd64) 向け
+npm run build_linux_amd64    # Linux (amd64) 向け
 npm run build_android_arm64  # Android (arm64) 向け
 
-npm test                     # Go と Chrome 拡張のテスト
+npm test                     # 資料の検査・別プラットフォームの型検査・Go と Chrome 拡張のテスト
+npm run vet_linux            # Linux 向けの型検査だけ
+npm run vet_android          # Android 向けの型検査だけ (linux && !android の抜けを捕まえる)
 cd autolog
 go test ./...                # Go のテストだけ
 ```
