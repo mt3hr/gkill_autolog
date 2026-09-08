@@ -53,6 +53,11 @@ if [ "$mode" = uninstall ]; then
     exit 0
 fi
 
+# systemd の ExecStart は実行ビットの無いファイルを 203/EXEC で拒む。
+# リポジトリ側でも実行ビットを立ててあるが、権限を持てない場所へ
+# 展開された場合に備えてここでも立てる。
+chmod +x "$AUTOLOG_SCRIPT_DIR/run_collect.sh" "$AUTOLOG_SCRIPT_DIR/run_import.sh" 2>/dev/null || true
+
 mkdir -p "$unit_dir"
 for unit in $units; do
     # ExecStart をこのリポジトリの実際の場所へ書き換えて置く。
