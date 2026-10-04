@@ -211,6 +211,27 @@ grep -o '"event_type":"[^"]*"' /sdcard/gkill_autolog/events/*.jsonl | sort | uni
 音声は止まっていて構いません（Android の制約）。アプリを開いて
 設定画面の状態表示が `音声: 録音中` に変われば正しい動きです。
 
+手動録音は、外部からの操作をブロードキャストで確かめます。
+設定の「外部アプリ（Tasker など）からの録音操作を受け付ける」がオフのうちは断られ、
+オンにすると始まり、もう一度で止まります。画面を消した状態でも録れることを見てください。
+
+```sh
+# 結果コード 1 が受け付けた、0 が断った（理由は data に出る）
+am broadcast -a com.mt3hr.gkill_autolog.TOGGLE_RECORDING -n com.mt3hr.gkill_autolog/.RecordingReceiver
+
+# <端末名>_<日時>_manual.m4a ができ、mtime が録り始めた時刻になっているか
+stat -c '%y %n' /sdcard/gkill_autolog/audio/*_manual.m4a
+```
+
+再起動のあと、アプリを開く前に叩くと `マイクを使える状態ではありません` で断られます。
+これは正しい動きです。アプリを一度開けば（Tasker の起動タスクで開かせてもよい）受け付けます。
+起動タスクでアプリを開かせたときは、書き出した JSONL に `collector_start` が
+1回だけ出ていることも見てください（画面からの開始と BootReceiver からの開始が重なっても、
+二重に始めない）。
+
+区切りの継ぎ目は60分待たないと出ません。確かめるときは `ManualRecording.kt` の
+`CHUNK_MINUTES` を一時的に 1 にしたビルドで見て、戻してからコミットします。
+
 書き出したファイルは取り込み後に消えます。
 `events/` が空なら、渡すものが無いか、まだ書き出していないかのどちらかです。
 

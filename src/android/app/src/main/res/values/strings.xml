@@ -44,6 +44,30 @@
     <string name="label_record_audio_while_screen_off">画面が消えている間・ロック中も録る</string>
     <!-- Android の制約。実装では埋められないので、設定画面にも書いておく。 -->
     <string name="note_audio_after_reboot">端末を再起動すると、アプリを一度開くまで音声だけ記録されません。マイクを使う常駐は、アプリが前に出ている間しか始められないためです（ほかの記録は自動で戻ります）。</string>
+    <string name="label_accept_external_recording_control">外部アプリ（Tasker など）からの録音操作を受け付ける</string>
+    <!-- 誰でも叩ける受け口なので既定はオフ。再起動の制約は定期録音と同じ。 -->
+    <string name="note_external_recording_control">Tasker からはブロードキャスト（RecordingReceiver）で開始・停止・切り替えができます。端末を再起動したあとは、アプリを一度開くまで受け付けられません。</string>
+
+    <!-- 手動録音。ボタンは画面の一番上にある。 -->
+    <string name="action_record_start">録音開始</string>
+    <string name="action_record_stop">録音停止（%1$s から録音中）</string>
+    <string name="record_need_microphone">マイクを許可してから、もう一度押してください</string>
+    <string name="record_need_collection">収集が止まっています。「収集を開始」を押してから録音してください</string>
+    <string name="recording_started">録音を開始しました</string>
+    <string name="recording_stopped">録音を停止しました</string>
+    <string name="recording_already">すでに録音中です</string>
+    <string name="recording_not_active">録音していません</string>
+    <string name="recording_refused_external">外部からの録音操作は設定で受け付けていません</string>
+    <string name="recording_no_permission">マイクの許可がないため録音できません</string>
+    <string name="recording_no_microphone">マイクを使える状態ではありません。gkill autolog を一度開いてください</string>
+    <string name="recording_no_device">端末名が決まっていないため録音できません。アプリの設定で端末名を入れてください</string>
+    <string name="recording_failed">録音できませんでした: %1$s</string>
+    <string name="recording_abandoned_microphone">マイクを使えなくなったため録音を止めました</string>
+    <string name="recording_abandoned_service">収集が止まったため録音を止めました</string>
+    <string name="recording_channel_name">手動録音</string>
+    <string name="recording_notification_title">録音中</string>
+    <string name="recording_notification_text">%1$s から録音しています（%2$d 分ごとに区切って保存）</string>
+    <string name="action_stop_recording">録音を停止</string>
 
     <string name="action_save">保存</string>
     <string name="action_start">収集を開始</string>

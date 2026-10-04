@@ -22,10 +22,11 @@
     <!-- 画面が消えている間も位置情報を記録するため。 -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
     <!--
-      定期的な録音のため。
+      定期的な録音と手動録音のため。
       位置情報と違い「バックグラウンドでのマイク」に当たる権限は無いので、
       マイクつきの常駐はアプリが前に出ている間しか開始できない。
       端末の再起動からは開始できず、次にアプリを開いたときに始まる。
+      Tasker からの手動録音は、常駐が既に掴んでいるマイクの上で録る。
     -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
@@ -136,5 +137,19 @@
         <receiver
             android:name=".ExportReceiver"
             android:exported="true" />
+
+        <!--
+          Tasker などから手動録音を始めたり止めたりさせる受け口。
+          ExportReceiver と同じく intent-filter は付けない。
+          誰でも叩けるので、設定で受け付けるようにしたときだけ動く（既定はオフ）。
+        -->
+        <receiver
+            android:name=".RecordingReceiver"
+            android:exported="true" />
+
+        <!-- 録音中の通知の「録音を停止」。自分の通知からしか届かないよう外へは出さない。 -->
+        <receiver
+            android:name=".RecordingStopReceiver"
+            android:exported="false" />
     </application>
 </manifest>

@@ -21,6 +21,15 @@
         android:orientation="vertical"
         android:padding="16dp">
 
+        <!-- 手動録音。いちばん押す機会が多いので一番上に置く。
+             表示は MainActivity が録音の状態に合わせて「録音開始」と「録音停止」で切り替える。 -->
+        <Button
+            android:id="@+id/record_toggle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="16dp"
+            android:text="@string/action_record_start" />
+
         <!-- 入力欄には labelFor で見出しを結び付ける (読み上げのため)。
              どれも自動入力の対象にならない設定値なので importantForAutofill を no にする。
              autofillHints="" は警告を黙らせるだけで、意図が伝わらない。 -->
@@ -242,6 +251,18 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
             android:text="@string/note_audio_after_reboot" />
+
+        <CheckBox
+            android:id="@+id/accept_external_recording_control"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="@string/label_accept_external_recording_control" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/note_external_recording_control" />
 
         <TextView
             android:layout_width="match_parent"

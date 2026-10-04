@@ -132,19 +132,43 @@ class AutologService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (!startForegroundCompat()) {
+        val action = intent?.action
+
+        // 既に収集しているところへ届いた素の開始は、何もせずに戻る。
+        //
+        // 再起動の直後は、画面（Tasker が起動時に開いたもの）からの開始と
+        // BootReceiver からの開始が前後して届く。後から来たほうで collector_start を
+        // 記録し直して各収集を始め直すと、取り込み側がそこを観測の切れ目とみなし、
+        // 利用セッションが割れる。
+        //
+        // ここでは startForeground も呼び直さない。既に前景にいるサービスへの
+        // startForegroundService は、改めての startForeground を求めない
+        // （ActiveServices が "Service already foreground; no new timeout" として扱う）。
+        // 呼び直すと、背景から届いた開始ではマイクを宣言し直せず、
+        // 画面から掴んだばかりのマイクを手放してしまう。
+        if (collecting && action != ACTION_RELOAD_SETTINGS && action != ACTION_START_RECORDING) {
+            return START_STICKY
+        }
+
+        if (!startForegroundCompat(forRecording = action == ACTION_START_RECORDING)) {
             // 常駐に入れなければ収集はできない。落とさずに畳む。
             stopSelf()
             return START_NOT_STICKY
         }
 
-        // 設定が変わっただけのときは、収集開始として記録し直さない。
+        // 設定が変わっただけのとき、画面から録音を始めただけのときは、
+        // 収集開始として記録し直さない。
         // ただし収集ループがまだ動いていない (この Intent でサービスが新規に
         // 生成された) 場合は、普通の開始として扱う。設定の入れ替えだけで戻ると、
         // 何も収集しないフォアグラウンドサービスが残り続ける。
-        if (intent?.action == ACTION_RELOAD_SETTINGS && collecting) {
-            location.restart()
-            systemEvents.applySettings()
+        if (collecting) {
+            if (action == ACTION_RELOAD_SETTINGS) {
+                location.restart()
+                systemEvents.applySettings()
+            }
+            if (action == ACTION_START_RECORDING) {
+                ManualRecording.start(applicationContext, ManualRecording.Source.APP)
+            }
             return START_STICKY
         }
 
@@ -163,6 +187,11 @@ class AutologService : Service() {
         handler.post(tick)
         collecting = true
 
+        // 画面の録音ボタンで起こされた回は、マイクつきの常駐に入ったところで録音を始める。
+        if (action == ACTION_START_RECORDING) {
+            ManualRecording.start(applicationContext, ManualRecording.Source.APP)
+        }
+
         // 強制終了されても再開させる。
         return START_STICKY
     }
@@ -175,7 +204,9 @@ class AutologService : Service() {
         location.stop()
         // 録りかけがあれば確定させる。停止そのものは録音スレッドで行われるので、
         // ここでは待たない（主スレッドなので長く塞ぐと ANR になる）。
+        // 手動録音もここで終える。マイクを持っているのはこの常駐なので、録り続けられない。
         audio.stop()
+        ManualRecording.abandon(applicationContext, R.string.recording_abandoned_service)
         media.flush()
 
         // 溜まっている点を書き残さない。
@@ -241,8 +272,13 @@ class AutologService : Service() {
         // マイクつきの常駐に入れていない間は録らない。掴めていないマイクから
         // 録っても無音になるだけで、録れなかった時間の音を作ることになる。
         // 途中でマイクを手放したときは、録りかけをそこで確定させる
-        // （観測はそこで終わったので、開いたまま捨てない）。
-        if (micForegroundActive) audio.recordIfDue(now) else audio.stop()
+        // （観測はそこで終わったので、開いたまま捨てない）。手動録音も同じ。
+        if (micForegroundActive) {
+            audio.recordIfDue(now)
+        } else {
+            audio.stop()
+            ManualRecording.abandon(applicationContext, R.string.recording_abandoned_microphone)
+        }
 
         writeGpxIfDue(now)
         exportIfDue(now)
@@ -325,15 +361,18 @@ class AutologService : Service() {
      * 位置情報と同じように単純に足すと、再起動のたびにここが失敗し、
      * 収集そのものが立ち上がらなくなる。マイクだけ失敗を飲み込んで、
      * 残りの種別で入り直す。音声は次にアプリが開かれたときに始まる。
+     *
+     * [forRecording] は画面の録音ボタンから起こされた回。設定にかかわらずマイクを宣言する。
      */
-    private fun startForegroundCompat(): Boolean {
+    private fun startForegroundCompat(forRecording: Boolean = false): Boolean {
         val notification = buildNotification()
+        val wantsMicrophone = wantsMicrophoneForegroundService(forRecording)
 
         // 種別の指定が要るのは Android 14 以降。それ以前はマニフェストの宣言で動く。
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             return try {
                 startForeground(NOTIFICATION_ID, notification)
-                micForegroundActive = wantsMicrophoneForegroundService()
+                micForegroundActive = wantsMicrophone
                 true
             } catch (e: Exception) {
                 Log.e(TAG, "常駐に入れなかった", e)
@@ -346,7 +385,7 @@ class AutologService : Service() {
             types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
         }
 
-        if (wantsMicrophoneForegroundService()) {
+        if (wantsMicrophone) {
             try {
                 startForeground(
                     NOTIFICATION_ID, notification,
@@ -382,11 +421,23 @@ class AutologService : Service() {
     /**
      * マイクつきの常駐にしたいか。
      *
-     * 設定でオンにしていて、かつ権限があるときだけ。
-     * どちらか欠けていると開始に失敗する（位置情報と同じ）。
+     * マイクを使う理由があって、かつ権限があるときだけ。
+     * 権限が欠けていると開始に失敗する（位置情報と同じ）。
+     *
+     * 理由は4つ。定期録音がオン、外部からの録音操作を受け付ける、手動録音の最中、
+     * 画面の録音ボタンから起こされた回。
+     * 外部操作を受け付けるときは、録っていなくても掴んでおく。命令は背景で届き、
+     * そこからはマイクを掴めないため（[RecordingReceiver]）。
+     * 手動録音の最中を入れるのは、録音中に設定を保存して設定の入れ替えが来たとき、
+     * 定期録音も外部操作もオフだからとマイクを手放して録音を止めないため。
      */
-    private fun wantsMicrophoneForegroundService(): Boolean {
-        if (!Config(applicationContext).recordAudio) return false
+    private fun wantsMicrophoneForegroundService(forRecording: Boolean): Boolean {
+        val config = Config(applicationContext)
+        val needed = forRecording ||
+            config.recordAudio ||
+            config.acceptExternalRecordingControl ||
+            ManualRecording.isActive
+        if (!needed) return false
         return ContextCompat.checkSelfPermission(this, android.Manifest.permission.RECORD_AUDIO) ==
             android.content.pm.PackageManager.PERMISSION_GRANTED
     }
@@ -481,6 +532,12 @@ class AutologService : Service() {
         /** 設定が変わったことをサービスへ伝える Intent の印。 */
         private const val ACTION_RELOAD_SETTINGS = "com.mt3hr.gkill_autolog.RELOAD_SETTINGS"
 
+        /**
+         * 画面の録音ボタンから、マイクを掴んでから手動録音を始めさせる Intent の印。
+         * サービスは外へ出していないので、自分の画面からしか届かない。
+         */
+        private const val ACTION_START_RECORDING = "com.mt3hr.gkill_autolog.START_RECORDING_FROM_APP"
+
         /** 利用者の操作で収集を始める。以後、再起動しても再開する。 */
         fun start(context: Context) {
             Config(context).collectionEnabled = true
@@ -518,7 +575,24 @@ class AutologService : Service() {
             context.startForegroundService(intent)
         }
 
-        private fun isRunning(context: Context): Boolean {
+        /**
+         * マイクを掴んでから手動録音を始める。**画面が前に出ているときだけ呼ぶこと。**
+         *
+         * 常駐がまだマイクを持っていないとき（定期録音も外部操作もオフ、
+         * 再起動のあと常駐だけが先に始まった、など）に、画面の録音ボタンから使う。
+         * マイクつきの常駐に入れるのは前面から起こしたときだけ。
+         *
+         * 常駐が動いていなければ何もしない。利用者が止めた収集を、録音のついでに始めない。
+         */
+        fun startRecording(context: Context) {
+            if (!isRunning(context)) return
+            val intent = Intent(context, AutologService::class.java)
+                .setAction(ACTION_START_RECORDING)
+            context.startForegroundService(intent)
+        }
+
+        /** 常駐が動いているか。 */
+        fun isRunning(context: Context): Boolean {
             val manager = context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
                 ?: return false
             @Suppress("DEPRECATION")

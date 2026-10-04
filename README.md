@@ -20,6 +20,7 @@ PC・Android 端末・Chrome から**客観的な操作ログを自動で集め�
 | 受け取った通知（Android） | Kmemo |
 | 定期的なスクリーンショット（間隔は設定できる） | IDF |
 | 定期的な録音（Android。間隔と長さは設定できる） | IDF（gkill 上で再生できます） |
+| 手動の録音（Android。画面のボタンか Tasker で始めて止める） | IDF（gkill 上で再生できます） |
 | 位置情報（Android） | GPX |
 
 Android では、**この中のどれを記録するかを設定画面のチェックボックスで選べます。**

@@ -288,6 +288,26 @@ class Config(context: Context) {
             .apply()
 
     /**
+     * 外部アプリ（Tasker など）からの手動録音の操作を受け付けるかどうか。**既定は受け付けない。**
+     *
+     * 記録する種類の切り替えではなく、[RecordingReceiver] という**誰でも叩ける受け口**を
+     * 開けるかどうかの設定。既定でオンにすると、入れただけで他のアプリが
+     * 録音を始められる経路になる。
+     *
+     * 上の「記録する種類は既定を true にする」約束の対象ではない。あれは
+     * 今まで記録できていたものが更新で黙って止まるのを防ぐためのもので、
+     * 新しく開ける経路を既定で閉じておいても、止まるものは無い。
+     *
+     * オンにすると、定期録音がオフでも常駐がマイクを掴んでおく。
+     * 背景で届く命令からはマイクを掴めないため（[AutologService] の startForegroundCompat）。
+     */
+    var acceptExternalRecordingControl: Boolean
+        get() = preferences.getBoolean(KEY_ACCEPT_EXTERNAL_RECORDING_CONTROL, false)
+        set(value) = preferences.edit()
+            .putBoolean(KEY_ACCEPT_EXTERNAL_RECORDING_CONTROL, value)
+            .apply()
+
+    /**
      * 端末名を config.env に合わせる。
      *
      * 端末名は autolog も使うので、二か所に持つと食い違う。
@@ -343,6 +363,7 @@ class Config(context: Context) {
         private const val KEY_AUDIO_INTERVAL = "audio_interval_minutes"
         private const val KEY_AUDIO_DURATION = "audio_duration_minutes"
         private const val KEY_RECORD_AUDIO_WHILE_SCREEN_OFF = "record_audio_while_screen_off"
+        private const val KEY_ACCEPT_EXTERNAL_RECORDING_CONTROL = "accept_external_recording_control"
         private const val KEY_APP_USAGE_INTERVAL = "app_usage_interval_seconds"
         private const val KEY_MEDIA_PLAY_INTERVAL = "media_play_interval_seconds"
         private const val KEY_CHROME_HISTORY_INTERVAL = "chrome_history_interval_seconds"

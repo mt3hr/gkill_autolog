@@ -103,9 +103,14 @@ android/app/src/main/java/com/mt3hr/gkill_autolog/
 ├── MainActivity.kt        設定と権限付与の画面
 ├── BootReceiver.kt        再起動後の再開
 ├── ExportReceiver.kt      外から書き出しをさせる受け口（取り込みの直前に叩かれる）
+├── ManualRecording.kt     手動録音（画面のボタンと Tasker から）。60分ごとに区切る
+├── RecordingReceiver.kt   外から手動録音を操作させる受け口（Tasker が叩く。設定でオンのときだけ）
+├── RecordingStopReceiver.kt  録音中の通知の「録音を停止」を受ける（外へは出さない）
 ├── Config.kt              設定。端末名は config.env を優先する
 ├── SharedStorage.kt       /sdcard/gkill_autolog の場所
-├── collect/               各収集（アプリ利用・通知・メディア・システム・撮影・位置情報）
+├── collect/               各収集（アプリ利用・通知・メディア・システム・撮影・位置情報・録音）
+│                          録音は AudioRecorder.kt がマイクのただ1つの持ち主で、
+│                          定期録音（AudioCollector.kt）も手動録音もこれを通す
 ├── export/                JSONL と GPX の書き出し
 ├── model/Event.kt         生ログの1件
 └── store/                 書き出すまでの一時保管（イベント・位置情報）

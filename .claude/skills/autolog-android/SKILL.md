@@ -1,6 +1,6 @@
 ---
 name: autolog-android
-description: "Android 収集アプリ（src/android/）と Android 上で動く Go の約束。書き出しファイル名の衝突で rename が黙って上書きすること、GpsPointStore の onUpgrade でテーブルを作り直さないこと、記録種別の既定値を false にしないことと「端末の利用」に切り替えを置かないこと、再生の区間を一時停止でまたがせないこと、マイク種別の前景サービスは失敗を飲み込んで残りで入り直すこと、ioExecutor が単一スレッドであること、MediaRecorder は使うスレッドの上で生成すること、共有ストレージに SQLite を置かないこと、Go の time.Local が UTC 固定であることを扱う。src/android/・src/autolog/internal/config/timezone_android.go を編集するとき必読。「更新後に何も記録しなくなった」「当日の GPX が短くなる」「一時停止しているのに再生の TimeIs が伸びる」の調査でも必読。"
+description: "Android 収集アプリ（src/android/）と Android 上で動く Go の約束。書き出しファイル名の衝突で rename が黙って上書きすること、GpsPointStore の onUpgrade でテーブルを作り直さないこと、記録種別の既定値を false にしないことと「端末の利用」に切り替えを置かないこと、再生の区間を一時停止でまたがせないこと、マイク種別の前景サービスは失敗を飲み込んで残りで入り直すこと、ioExecutor が単一スレッドであること、MediaRecorder は使うスレッドの上で生成すること、定期録音と手動録音のマイクは AudioRecorder ただ1つが持つこと、背景で届く録音の命令（RecordingReceiver）からマイクを宣言し直さないことと外部からの録音操作を既定オフにすること、収集中に届いた素の開始で collector_start を重ねないこと、共有ストレージに SQLite を置かないこと、Go の time.Local が UTC 固定であることを扱う。src/android/・src/autolog/internal/config/timezone_android.go を編集するとき必読。「更新後に何も記録しなくなった」「当日の GPX が短くなる」「一時停止しているのに再生の TimeIs が伸びる」の調査でも必読。"
 ---
 
 # Android 収集アプリの不変条件
@@ -39,6 +39,40 @@ description: "Android 収集アプリ（src/android/）と Android 上で動く 
 - **記録をやめる設定にするときは、開いている接続区間を閉じる。** Wi-Fi・Bluetooth・充電。
   切断を書かずに止めると、取り込み側は継続中とみなす。常駐が続く限り観測の切れ目は
   来ないので、区間が何日でも育つ。そのために接続中のものを控えておく
+
+## 録音のマイクは AudioRecorder ただ1つが持つ
+
+`collect/AudioRecorder.kt`（プロセスで1つの `object`）。
+
+- **定期録音（`AudioCollector`）も手動録音（`ManualRecording`）も必ずここを通す。**
+  MediaRecorder を別に作らない。同じアプリから2本同時に開くと、端末と OS の版によって
+  片方が無音になったり開始に失敗したりし、録れたつもりの音が残らない
+- 開始・停止・時間切れ・書き出しは録音スレッド1本の上で順に起きる。
+  「定期を止めてから手動を始める」の順序はこれで保証している
+- **録り終えたときに取り消すのは、その録音のタイマーだけ。**
+  `removeCallbacksAndMessages(null)` にすると、同じスレッドに積まれた次の録音の開始
+  （定期→手動の切り替え、手動の区切りの継ぎ目）まで黙って消え、録音が始まらない
+- 置き場の名前は既存を避けて採番する（`-2`、`-3`…）。`renameTo` は行き先があると
+  黙って上書きする（下の「書き出しファイル名」と同じ理由）
+
+## 背景で届く録音の命令からマイクを掴み直さない
+
+`RecordingReceiver.kt` / `AutologService.kt`。
+
+- Tasker のブロードキャストは背景で届く。そこから `startForegroundService` で
+  マイク種別を宣言すると例外になる。**常駐が既に掴んでいるマイクの上で録る。**
+  外部操作を受け付ける設定なら、定期録音がオフでも常駐がマイクを掴んでおく
+  （`wantsMicrophoneForegroundService`）。掴めていなければ理由をトーストに出して断る
+- **外部からの録音操作の設定（`acceptExternalRecordingControl`）は既定 false。**
+  記録種別の「既定を false にしない」の対象ではない（新しく開ける経路で、止まるものは無い）。
+  true にすると、入れただけで他のアプリが録音を始められる受け口になる
+- **収集中に届いた素の開始（action なし）では、`startForeground` も `collector_start` も
+  呼び直さない。** 再起動の直後は、画面（Tasker が開く）からの開始と BootReceiver からの
+  開始が前後して届く。呼び直すと、背景からはマイクを宣言し直せずに手放し、
+  `collector_start` が重なって取り込み側の利用セッションが割れる。
+  既に前景にいるサービスへの `startForegroundService` は改めての `startForeground` を求めない
+- 手動録音の区切りの継ぎ目は録音スレッドの上でその場で次を始める。
+  主スレッドを経由すると、その間に定期録音の開始が割り込む
 
 ## 書き出しファイル名は既存を避けて採番する
 

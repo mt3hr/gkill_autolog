@@ -34,6 +34,18 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var config: Config
     private lateinit var statusView: TextView
+    private lateinit var recordButton: Button
+
+    /**
+     * 手動録音の状態が変わったときに表示を直す。
+     *
+     * Tasker・通知・区切りの失敗など、この画面の外からも変わるので、
+     * 押したときに直すだけでは足りない。
+     */
+    private val recordingListener: () -> Unit = {
+        updateRecordButton()
+        updateStatus()
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -42,8 +54,11 @@ class MainActivity : AppCompatActivity() {
         config = Config(this)
         config.syncDeviceFromSharedConfig()
         statusView = findViewById(R.id.status)
+        recordButton = findViewById(R.id.record_toggle)
 
         applyWindowInsets()
+
+        recordButton.setOnClickListener { toggleRecording() }
 
         val deviceInput = findViewById<EditText>(R.id.device)
         val appUsageCheckBox = findViewById<CheckBox>(R.id.collect_app_usage)
@@ -68,6 +83,7 @@ class MainActivity : AppCompatActivity() {
         val audioIntervalInput = findViewById<EditText>(R.id.audio_interval)
         val audioDurationInput = findViewById<EditText>(R.id.audio_duration)
         val audioScreenOffCheckBox = findViewById<CheckBox>(R.id.record_audio_while_screen_off)
+        val externalRecordingCheckBox = findViewById<CheckBox>(R.id.accept_external_recording_control)
 
         deviceInput.setText(config.device)
         appUsageCheckBox.isChecked = config.collectAppUsage
@@ -92,6 +108,7 @@ class MainActivity : AppCompatActivity() {
         audioIntervalInput.setText(config.audioIntervalMinutes.toString())
         audioDurationInput.setText(config.audioDurationMinutes.toString())
         audioScreenOffCheckBox.isChecked = config.recordAudioWhileScreenOff
+        externalRecordingCheckBox.isChecked = config.acceptExternalRecordingControl
 
         findViewById<Button>(R.id.save).setOnClickListener {
             config.device = deviceInput.text.toString()
@@ -108,6 +125,7 @@ class MainActivity : AppCompatActivity() {
             config.highAccuracyMode = highAccuracyCheckBox.isChecked
             config.recordAudio = audioCheckBox.isChecked
             config.recordAudioWhileScreenOff = audioScreenOffCheckBox.isChecked
+            config.acceptExternalRecordingControl = externalRecordingCheckBox.isChecked
 
             // 空欄や範囲外はそのまま使わず、扱える値へ丸めて画面へ返す。
             val interval = Config.clampLocationInterval(
@@ -179,7 +197,7 @@ class MainActivity : AppCompatActivity() {
 
             // 収集中なら、新しい設定で購読し直させる。
             // マイクつきの常駐を掴めるのはここ（画面が前に出ている）だけなので、
-            // 音声をオンにしたときはこの経路が唯一の始まりどころになる。
+            // 音声や外部からの録音操作をオンにしたときは、この経路が唯一の始まりどころになる。
             AutologService.reloadSettings(this)
             updateStatus()
         }
@@ -222,6 +240,17 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    override fun onStart() {
+        super.onStart()
+        ManualRecording.addListener(recordingListener)
+        updateRecordButton()
+    }
+
+    override fun onStop() {
+        ManualRecording.removeListener(recordingListener)
+        super.onStop()
+    }
+
     override fun onResume() {
         super.onResume()
         rearmMicrophone()
@@ -235,14 +264,63 @@ class MainActivity : AppCompatActivity() {
      * 端末の再起動から始まった常駐はマイクを持てないので、音声だけ記録されない。
      * この画面が見えているいまなら掴めるので、必要なら掴み直させる。
      *
-     * これが再起動後に音声が戻る唯一の道になる。
+     * これが再起動後に音声が戻る唯一の道になる。Tasker から手動録音を使うときは、
+     * Tasker が起動時にこの画面を一度開くことで、ここを通す。
      */
     private fun rearmMicrophone() {
-        if (!config.recordAudio) return
-        if (AutologService.isMicrophoneForegroundActive()) return
+        if (!config.recordAudio && !config.acceptExternalRecordingControl) return
         if (!hasMicrophonePermission()) return
+        if (!AutologService.isRunning(this)) {
+            // 再起動の直後に Tasker がこの画面を開くと、BootReceiver が常駐を
+            // 始めるより先に来ることがある（BOOT_COMPLETED は受け手へ順に配られ、
+            // どちらが先かは決まらない）。ここで何もしないと、マイクを掴む機会が消え、
+            // 後から背景で始まった常駐はマイクを持てない。
+            // 前に出ているいまなら掴めるので、ここから始める。
+            // 利用者が収集を止めていれば始めない（startIfEnabled）。
+            AutologService.startIfEnabled(this)
+            return
+        }
+        if (AutologService.isMicrophoneForegroundActive()) return
         AutologService.reloadSettings(this)
     }
+
+    /**
+     * 手動録音を始めるか止める。画面の一番上のボタン。
+     *
+     * マイクは常駐が掴んでいるものを使う。まだ掴めていなければ、画面が前に出ている
+     * いまのうちに常駐へ掴ませてから始める（[AutologService.startRecording]）。
+     */
+    private fun toggleRecording() {
+        if (ManualRecording.isActive) {
+            ManualRecording.stop(this, ManualRecording.Source.APP)
+            return
+        }
+        if (!hasMicrophonePermission()) {
+            requestMicrophonePermission()
+            statusView.text = getString(R.string.record_need_microphone)
+            return
+        }
+        if (AutologService.isMicrophoneForegroundActive()) {
+            ManualRecording.start(this, ManualRecording.Source.APP)
+            return
+        }
+        if (!AutologService.isRunning(this)) {
+            // 利用者が止めた収集を、録音のついでに始めない。
+            statusView.text = getString(R.string.record_need_collection)
+            return
+        }
+        AutologService.startRecording(this)
+    }
+
+    private fun updateRecordButton() {
+        recordButton.text = if (ManualRecording.isActive) {
+            getString(R.string.action_record_stop, clock(ManualRecording.startedAt))
+        } else {
+            getString(R.string.action_record_start)
+        }
+    }
+
+    private fun clock(at: Long): String = SimpleDateFormat("HH:mm:ss", Locale.US).format(Date(at))
 
     /**
      * 画面の上下がシステムバーに隠れないようにする。
@@ -319,9 +397,10 @@ class MainActivity : AppCompatActivity() {
             appendLine("バッテリー最適化除外: ${mark(isIgnoringBatteryOptimizations())}")
             appendLine()
             appendLine("記録する種類: ${enabledCollectTypes()}")
-            if (config.recordAudio) {
+            if (config.recordAudio || config.acceptExternalRecordingControl) {
                 appendLine("音声:         ${audioStatus()}")
             }
+            manualRecordingStatus()?.let { appendLine("手動録音:     $it") }
             appendLine()
             appendLine("書き出し先: ${SharedStorage.eventsDir}")
             appendLine("GPX:        ${SharedStorage.gpsLogDir}")
@@ -437,6 +516,10 @@ class MainActivity : AppCompatActivity() {
         if (!AutologService.isMicrophoneForegroundActive()) {
             return "休止（アプリを開くと戻ります）"
         }
+        if (!config.recordAudio) {
+            // 定期録音はオフで、外部からの録音操作のためにマイクを掴んでいる。
+            return "待機中（外部からの録音操作を受け付けます）"
+        }
         val failure = AudioCollector.lastFailure
         if (failure.isNotEmpty()) return "録音中（直近の失敗: $failure）"
 
@@ -444,6 +527,14 @@ class MainActivity : AppCompatActivity() {
         if (at == 0L) return "録音中（まだ録れていません）"
         val stamp = SimpleDateFormat("MM-dd HH:mm", Locale.US).format(Date(at))
         return "録音中（最後に録れたのは $stamp）"
+    }
+
+    /** 手動録音の状況。録っていなくて失敗も無ければ出さない。 */
+    private fun manualRecordingStatus(): String? {
+        if (ManualRecording.isActive) return "録音中（${clock(ManualRecording.startedAt)} から）"
+        val failure = ManualRecording.lastFailure
+        if (failure.isNotEmpty()) return "直近の失敗: $failure"
+        return null
     }
 
     private fun mark(granted: Boolean) = if (granted) "許可" else "未許可"
